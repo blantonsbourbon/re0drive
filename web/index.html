@@ -335,7 +335,7 @@
                           max="1000"
                           required
                         /><small
-                          >转存前重新查询费用，费用未知时跳过。</small
+                          >仅用于积分未知的版本（默认 20）；搜索结果不按此过滤。</small
                         ></label
                       >
                     </div>
@@ -364,6 +364,24 @@
                         ></span
                       ></label
                     >
+                  </section>
+                  <section class="panel settings-panel" id="machine-token-panel">
+                    <div class="panel-heading">
+                      <h2><span class="section-icon">API</span> 机器令牌</h2>
+                      <span id="token-state" class="pill neutral">未生成</span>
+                    </div>
+                    <p class="helper-text">
+                      供 Hermes 等程序调用 <code>POST /api/resources/search</code>、<code>/api/jobs</code>
+                      （<code>Authorization: Bearer …</code>）。令牌只显示一次，服务端仅保存哈希；重新生成会使旧令牌立即失效。
+                    </p>
+                    <div id="token-reveal" class="token-reveal hidden">
+                      <code id="token-value"></code>
+                      <button class="button ghost" type="button" id="token-copy">复制</button>
+                    </div>
+                    <div class="button-row">
+                      <button class="button secondary" type="button" id="token-rotate">生成 / 轮换令牌</button
+                      ><button class="button ghost" type="button" id="token-revoke">撤销</button>
+                    </div>
                   </section>
                 </div>
                 <aside class="panel setup-guide">
@@ -472,13 +490,9 @@
             </select></label
           >
         </div>
-        <label class="checkbox-label"
-          ><input type="checkbox" name="auto_transfer" checked /><span
-            >符合规则后自动解锁并转存<small
-              >仅处理 115 资源，每次最多新增 10 个任务。</small
-            ></span
-          ></label
-        >
+<p class="helper-text">
+          订阅只负责定时查找并列出候选版本，不会自动解锁或转存（即使是 0 积分）。请在订阅卡片上选择版本后再转存。
+        </p>
         <div class="dialog-actions">
           <button
             class="button secondary"
@@ -534,16 +548,17 @@
             >目标目录 ID<input
               name="target_cid"
               inputmode="numeric"
-              pattern="[0-9]{1,20}"
-              required /></label
+              pattern="[0-9]{0,20}"
+              placeholder="留空 = 115 根目录"
+            /><small>留空即接收到根目录（0）。</small></label
           ><label
             >积分上限<input
               name="max_points"
               type="number"
               min="0"
               max="1000"
-              required
-          /></label>
+              placeholder="默认 = 该版本标价"
+            /><small>解锁前会重新查询，实际费用高于上限则跳过。</small></label>
         </div>
         <p class="helper-text">
           转存前会重新检查积分。超过上限或费用未知时跳过。

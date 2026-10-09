@@ -247,6 +247,7 @@ async function refresh() {
 }
 async function start() {
   await loadSettings();
+  loadToken().catch(() => {});
   await refresh();
   page(location.hash.slice(1));
   clearInterval(state.timer);
@@ -303,89 +304,119 @@ $("#search-form").addEventListener("submit", (e) => {
   });
 });
 $("#quality-filter").addEventListener("change", renderResults);
+const flat = (v) =>
+  Array.isArray(v)
+    ? v.filter((x) => x !== "" && x != null).join(" / ")
+    : v == null
+      ? ""
+      : String(v);
+const panLabel = (r) => r.pan_type || r.provider || "未知";
+function pointsText(r) {
+  return r.is_unlocked
+    ? "已拥有"
+    : r.unlock_points == null
+      ? "积分未知"
+      : `${r.unlock_points} 积分`;
+}
+function resourceCard(r, actions = true) {
+  const res = flat(r.video_resolution) || r.quality || "";
+  const subs = [flat(r.subtitle_language), flat(r.subtitle_type)]
+    .filter(Boolean)
+    .join(" · ");
+  const ok = r.selectable !== false && r.provider === "115";
+  return h(
+    "article",
+    { class: `resource-card${ok ? "" : " unselectable"}` },
+    h(
+      "div",
+      { class: "resource-cover" },
+      h(
+        "strong",
+        {},
+        res.includes("2160") || /4k/i.test(res)
+          ? "4K"
+          : res.includes("1080")
+            ? "1080P"
+            : res.includes("720")
+              ? "720P"
+              : "RE0",
+      ),
+      badge(panLabel(r), ok ? "light" : "neutral"),
+    ),
+    h(
+      "div",
+      { class: "resource-body" },
+      h("h3", {}, r.title || r.slug),
+      h(
+        "dl",
+        { class: "resource-facts" },
+        ...[
+          ["大小", flat(r.share_size) || r.size || "未标注"],
+          ["分辨率", res || "未标注"],
+          ["来源", flat(r.source) || "未标注"],
+          ["字幕", subs || "未标注"],
+          ["积分", pointsText(r)],
+        ].map(([k, v]) => h("div", {}, h("dt", {}, k), h("dd", {}, v))),
+      ),
+      r.remark ? h("p", { class: "resource-remark" }, r.remark) : null,
+      actions
+        ? h(
+            "div",
+            { class: "resource-actions" },
+            ok
+              ? button("转存到 115 ↗", () => transfer(r), "button primary")
+              : h(
+                  "span",
+                  { class: "pill neutral" },
+                  `不可转存 · ${panLabel(r)}`,
+                ),
+            ok
+              ? button("订阅此资源", () => editSub(null, r), "button secondary")
+              : null,
+          )
+        : null,
+    ),
+  );
+}
 function renderResults() {
   const quality = $("#quality-filter").value,
     list = state.results.filter(
-      (r) => !quality || `${r.quality} ${r.title}`.includes(quality),
+      (r) =>
+        !quality ||
+        `${r.quality} ${flat(r.video_resolution)} ${r.title}`.includes(quality),
     );
   $("#search-status").textContent =
     `找到 ${state.results.length} 个资源 · 当前显示 ${list.length} 个${state.settings.mode === "demo" ? " · 示例数据" : ""}`;
   $("#resources-list").replaceChildren(
     ...(list.length
-      ? list.map((r) =>
-          h(
-            "article",
-            { class: "resource-card" },
-            h(
-              "div",
-              { class: "resource-cover" },
-              h(
-                "strong",
-                {},
-                r.quality.includes("2160")
-                  ? "4K"
-                  : r.quality.includes("1080")
-                    ? "1080P"
-                    : "RE0",
-              ),
-              badge("115", "light"),
-            ),
-            h(
-              "div",
-              { class: "resource-body" },
-              h("h3", {}, r.title || r.slug),
-              h(
-                "div",
-                { class: "resource-meta" },
-                h("span", {}, r.quality || "画质未标注"),
-                h("span", {}, r.size || "大小未标注"),
-              ),
-              h(
-                "div",
-                { class: "resource-cost" },
-                "解锁所需",
-                h(
-                  "strong",
-                  {},
-                  r.is_unlocked
-                    ? "已拥有"
-                    : r.unlock_points == null
-                      ? "积分未知"
-                      : `${r.unlock_points} 积分`,
-                ),
-              ),
-              h(
-                "div",
-                { class: "resource-actions" },
-                button("转存到 115 ↗", () => transfer(r), "button primary"),
-                button(
-                  "订阅此资源",
-                  () => editSub(null, r),
-                  "button secondary",
-                ),
-              ),
-            ),
-          ),
-        )
+      ? list.map((r) => resourceCard(r))
       : [empty("没有匹配的资源", "试试其他片名、TMDB ID 或画质筛选。")]),
   );
 }
 function transfer(r) {
   state.selected = r;
-  $("#transfer-title").textContent = r.title || r.slug;
+  $("#transfer-title").textContent =
+    `${r.title || r.slug} · ${panLabel(r)} · ${pointsText(r)}`;
+  const cid = state.settings.default_target_cid;
   fill($("#transfer-form"), {
-    target_cid: state.settings.default_target_cid,
-    max_points: state.settings.default_max_points,
+    target_cid: cid && cid !== "0" ? cid : "",
+    max_points:
+      r.unlock_points != null && r.unlock_points >= 0
+        ? r.unlock_points
+        : state.settings.default_max_points,
   });
   $("#transfer-dialog").showModal();
 }
 $("#transfer-form").addEventListener("submit", (e) => {
   e.preventDefault();
   busy($('button[type="submit"]', e.target), async () => {
-    const r = await api("/api/jobs", "POST", {
-      resource: state.selected,
-      ...values(e.target),
-    });
+    const f = e.target,
+      body = { resource: state.selected };
+    const cid = field(f, "target_cid").value.trim(),
+      mp = field(f, "max_points").value.trim();
+    if (cid) body.target_cid = cid;
+    if (mp !== "") body.max_points = Number(mp);
+    const r = await api("/api/jobs", "POST", body);
     $("#transfer-dialog").close();
     toast(
       r.duplicate
@@ -415,7 +446,6 @@ function editSub(s, r) {
           ? "1080"
           : "",
       interval_minutes: 30,
-      auto_transfer: true,
     },
   );
   $("#subscription-title").textContent = s ? "编辑订阅" : "新建订阅";
@@ -489,9 +519,7 @@ function renderSubs(list) {
               h("h3", {}, s.name),
               badge(
                 s.enabled
-                  ? s.auto_transfer
-                    ? "自动转存"
-                    : "仅检查"
+                  ? "仅列候选"
                   : "已停用",
                 s.enabled ? "success" : "neutral",
               ),
@@ -522,6 +550,14 @@ function renderSubs(list) {
               h("br"),
               `${time(s.last_run)}${s.enabled ? ` · 下次 ${s.next_run ? time(s.next_run) : "即将"}` : ""}`,
             ),
+            s.candidates?.length
+              ? h(
+                  "details",
+                  { class: "candidates" },
+                  h("summary", {}, `候选版本 ${s.candidates.length} 个 · 选择后转存`),
+                  ...s.candidates.map((r) => resourceCard(r)),
+                )
+              : null,
             h(
               "div",
               { class: "rule-controls" },
@@ -582,7 +618,17 @@ function renderJobs(list) {
                 `${j.mode === "demo" ? "演示任务 · " : ""}上限 ${j.max_points} 分 · ${j.subscription_id ? "订阅" : "手动"}`,
               ),
             ),
-            h("td", {}, j.target_cid),
+            h(
+              "td",
+              {},
+              j.target_cid,
+              ...(j.received || [])
+                .filter((x) => x.local_id)
+                .slice(0, 3)
+                .map((x) =>
+                  h("small", {}, `${x.is_dir ? "目录" : "文件"} ${x.name} → ${x.local_id}`),
+                ),
+            ),
             h("td", {}, badge(label, kind)),
             h("td", {}, j.message),
             h(
@@ -618,7 +664,7 @@ function renderJobs(list) {
             h(
               "td",
               { colspan: 5 },
-              empty("还没有转存任务", "选择一个资源，或创建自动转存订阅。"),
+              empty("还没有转存任务", "搜索资源并选择一个版本转存。"),
             ),
           ),
         ]),
@@ -775,3 +821,35 @@ $("#re0-qr").addEventListener("click", (e) => busy(e.currentTarget, () => qrOpen
 api("/api/auth/status")
   .then((s) => (s.authenticated ? start() : showAuth()))
   .catch((e) => toast(e.message, true));
+
+async function loadToken() {
+  const r = await api("/api/machine-token");
+  const t = r.token;
+  $("#token-state").textContent = t
+    ? `${t.prefix}… · ${t.last_used ? `最近使用 ${time(t.last_used)}` : "未使用"}`
+    : "未生成";
+  $("#token-state").className = `pill ${t ? "success" : "neutral"}`;
+}
+$("#token-rotate").addEventListener("click", (e) =>
+  busy(e.currentTarget, async () => {
+    if (!confirm("生成新令牌后旧令牌立即失效，继续？")) return;
+    const r = await api("/api/machine-token", "POST");
+    $("#token-value").textContent = r.token;
+    $("#token-reveal").classList.remove("hidden");
+    toast("令牌只显示这一次，请立即保存");
+    await loadToken();
+  }),
+);
+$("#token-copy").addEventListener("click", async () => {
+  await navigator.clipboard.writeText($("#token-value").textContent);
+  toast("已复制");
+});
+$("#token-revoke").addEventListener("click", (e) =>
+  busy(e.currentTarget, async () => {
+    if (!confirm("撤销后使用该令牌的程序将无法访问，继续？")) return;
+    await api("/api/machine-token", "DELETE");
+    $("#token-value").textContent = "";
+    $("#token-reveal").classList.add("hidden");
+    await loadToken();
+  }),
+);
