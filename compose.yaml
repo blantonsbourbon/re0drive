@@ -1,0 +1,17 @@
+services:
+  re0drive:
+    build: .
+    image: re0drive:0.1.0
+    restart: unless-stopped
+    ports:
+      - "${RE0DRIVE_HOST_BIND:-127.0.0.1}:8787:8787"
+    environment:
+      TZ: ${TZ:-Asia/Hong_Kong}
+      RE0_GATEWAY_URL: ${RE0_GATEWAY_URL:-https://re0.tgtodrive.top}
+      RE0_GATEWAY_SECRET: ${RE0_GATEWAY_SECRET:-}
+      RE0DRIVE_COOKIE_SECURE: ${RE0DRIVE_COOKIE_SECURE:-0}
+    volumes:
+      - re0drive-data:/data
+    stop_grace_period: 3m
+volumes:
+  re0drive-data:

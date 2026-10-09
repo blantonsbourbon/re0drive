@@ -5,3 +5,6 @@
 *.db-shm
 *.db-wal
 
+artifacts/
+__pycache__/
+*.pyc

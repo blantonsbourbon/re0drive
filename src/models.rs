@@ -16,7 +16,18 @@ pub struct Settings {
 }
 impl Default for Settings {
     fn default() -> Self {
-        Self { mode: "demo".into(), re0_base_url: "https://re0.tgtodrive.top".into(), install_id: format!("inst_{}", uuid::Uuid::new_v4().simple()), re0_shared_secret: String::new(), tmdb_api_key: String::new(), cookie_115: String::new(), default_target_cid: "0".into(), default_max_points: 4, checkin_enabled: false, last_checkin_day: String::new() }
+        Self {
+            mode: "demo".into(),
+            re0_base_url: "https://re0.tgtodrive.top".into(),
+            install_id: format!("inst_{}", uuid::Uuid::new_v4().simple()),
+            re0_shared_secret: String::new(),
+            tmdb_api_key: String::new(),
+            cookie_115: String::new(),
+            default_target_cid: "0".into(),
+            default_max_points: 4,
+            checkin_enabled: false,
+            last_checkin_day: String::new(),
+        }
     }
 }
 impl Settings {
@@ -34,9 +45,12 @@ pub struct Resource {
     pub unlock_points: Option<i64>,
     pub is_unlocked: bool,
     pub quality: String,
-    #[serde(default)] pub size: String,
-    #[serde(default)] pub tmdb_id: String,
-    #[serde(default)] pub media_type: String,
+    #[serde(default)]
+    pub size: String,
+    #[serde(default)]
+    pub tmdb_id: String,
+    #[serde(default)]
+    pub media_type: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -59,16 +73,51 @@ pub struct Subscription {
     pub next_run: i64,
 }
 impl Default for Subscription {
-    fn default() -> Self { Self { id:String::new(),name:String::new(),query:String::new(),media_type:"movie".into(),target_cid:"0".into(),max_points:4,quality:String::new(),include_keywords:String::new(),exclude_keywords:String::new(),interval_minutes:30,auto_transfer:true,enabled:true,last_run:None,last_result:String::new(),next_run:0 } }
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            name: String::new(),
+            query: String::new(),
+            media_type: "movie".into(),
+            target_cid: "0".into(),
+            max_points: 4,
+            quality: String::new(),
+            include_keywords: String::new(),
+            exclude_keywords: String::new(),
+            interval_minutes: 30,
+            auto_transfer: true,
+            enabled: true,
+            last_run: None,
+            last_result: String::new(),
+            next_run: 0,
+        }
+    }
 }
 impl Subscription {
     pub fn matches(&self, r: &Resource) -> bool {
-        if r.provider != "115" { return false; }
-        if !r.is_unlocked && r.unlock_points.is_none_or(|n| n < 0 || n > self.max_points) { return false; }
-        let text = format!("{} {}",r.title,r.quality).to_lowercase();
-        if !self.quality.is_empty() && !text.contains(&self.quality.to_lowercase()) { return false; }
-        let keywords = |s: &str| s.split([',','，','\n']).map(str::trim).filter(|v| !v.is_empty()).map(str::to_lowercase).collect::<Vec<_>>();
-        keywords(&self.include_keywords).iter().all(|v| text.contains(v)) && !keywords(&self.exclude_keywords).iter().any(|v| text.contains(v))
+        if r.provider != "115" {
+            return false;
+        }
+        if !r.is_unlocked && r.unlock_points.is_none_or(|n| n < 0 || n > self.max_points) {
+            return false;
+        }
+        let text = format!("{} {}", r.title, r.quality).to_lowercase();
+        if !self.quality.is_empty() && !text.contains(&self.quality.to_lowercase()) {
+            return false;
+        }
+        let keywords = |s: &str| {
+            s.split([',', '，', '\n'])
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(str::to_lowercase)
+                .collect::<Vec<_>>()
+        };
+        keywords(&self.include_keywords)
+            .iter()
+            .all(|v| text.contains(v))
+            && !keywords(&self.exclude_keywords)
+                .iter()
+                .any(|v| text.contains(v))
     }
 }
 
@@ -88,8 +137,16 @@ pub struct Job {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-pub struct Activity { pub id: i64, pub kind: String, pub message: String, pub created_at: i64 }
+pub struct Activity {
+    pub id: i64,
+    pub kind: String,
+    pub message: String,
+    pub created_at: i64,
+}
 
-pub fn valid_cid(cid: &str) -> bool { !cid.is_empty() && cid.len() <= 20 && cid.bytes().all(|b| b.is_ascii_digit()) }
-pub fn valid_media_type(value: &str) -> bool { matches!(value, "movie"|"tv") }
-
+pub fn valid_cid(cid: &str) -> bool {
+    !cid.is_empty() && cid.len() <= 20 && cid.bytes().all(|b| b.is_ascii_digit())
+}
+pub fn valid_media_type(value: &str) -> bool {
+    matches!(value, "movie" | "tv")
+}

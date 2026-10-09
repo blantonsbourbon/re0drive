@@ -1,54 +1,559 @@
 <!doctype html>
 <html lang="zh-CN">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#152621"><title>RE0Drive · 订阅与转存</title><link rel="stylesheet" href="/style.css"><script defer src="/app.js"></script></head>
-<body>
-<div class="shell">
-  <aside class="sidebar">
-    <a class="brand" href="#overview"><span class="brand-mark">r<span>0</span></span><span>RE0Drive<small>THE QUIET COLLECTION</small></span></a>
-    <div class="nav-label">工作空间</div>
-    <nav aria-label="主导航">
-      <button class="nav-item active" data-page="overview"><span class="nav-icon">▦</span>工作台</button>
-      <button class="nav-item" data-page="resources"><span class="nav-icon">⌕</span>发现资源</button>
-      <button class="nav-item" data-page="subscriptions"><span class="nav-icon">◉</span>我的订阅<span id="nav-sub-count" class="nav-count">0</span></button>
-      <button class="nav-item" data-page="tasks"><span class="nav-icon">⇩</span>转存任务</button>
-      <button class="nav-item" data-page="settings"><span class="nav-icon">⚙</span>连接与设置</button>
-    </nav>
-    <div class="sidebar-bottom"><div class="side-account"><span class="account-dot"></span><div><strong id="side-mode">尚未配置</strong><small>RE0 → 115</small></div></div><div class="sidebar-footer"><span>v0.1.0</span><button id="logout" class="text-button">退出登录 ↗</button></div></div>
-  </aside>
-  <main>
-    <header class="topbar"><div class="breadcrumb">个人媒体空间 <span>/</span> <strong id="page-label">工作台</strong></div><div class="topbar-right"><span class="server-badge"><i></i>服务已启动</span><span class="avatar">R</span></div></header>
-    <div id="demo-banner" class="demo-banner hidden">演示模式 · 使用示例资源，签到与转存均不会发送外部请求。<button data-page="settings">连接真实账号 →</button></div>
-    <div class="content">
-      <section id="page-overview" class="page">
-        <div class="page-heading"><div><div class="eyebrow">YOUR COLLECTION, ON AUTOPILOT</div><h1>想看的，都有着落。</h1><p>发现资源，设好规则，剩下的交给订阅。</p></div><button class="button primary" data-action="new-sub"><span>＋</span>新建订阅</button></div>
-        <div class="stats-grid"><div class="stat"><span>运行中的订阅 <i>◉</i></span><strong id="stat-sub">0</strong><small>持续检查更新</small></div><div class="stat"><span>等待处理 <i>⇣</i></span><strong id="stat-pending">0</strong><small>持久化任务队列</small></div><div class="stat"><span>成功转存 <i>✓</i></span><strong id="stat-success">0</strong><small>真实账号已接收的任务</small></div><div class="stat"><span>需要核对 <i>◎</i></span><strong id="stat-review">0</strong><small>查看外部操作结果</small></div></div>
-        <div class="discover-card"><div class="discover-copy"><span class="pill light">DISCOVER / RE0</span><h2>下一部好片，<br>从这里开始。</h2><p>搜索片名或 TMDB ID，找到适合你的版本。</p><button class="button white" data-page="resources">发现资源 <span>↗</span></button></div><div class="abstract-art" aria-hidden="true"><div class="art-ring r1"></div><div class="art-ring r2"></div><div class="art-orbit"></div><div class="art-card"><div class="film-lines"></div><span>115</span><small>YOUR NEXT FAVORITE</small></div><span class="art-star s1">✦</span><span class="art-star s2">✦</span><span class="art-label">A SPACE FOR STORIES.</span></div></div>
-        <div class="two-column"><section class="panel"><div class="panel-heading"><h2>订阅动态 <span id="rule-count" class="subtle">0</span></h2><button class="text-button green" data-page="subscriptions">查看全部 ↗</button></div><div id="overview-rules"></div></section><section class="panel"><div class="panel-heading"><h2>最近活动</h2><span class="subtle">自动更新</span></div><div id="activity-list"></div></section></div>
-        <div class="footnote">轻量运行，持续收集。<span>Rust · Axum · SQLite</span></div>
-      </section>
-      <section id="page-resources" class="page hidden">
-        <div class="page-heading"><div><div class="eyebrow">FIND YOUR NEXT FAVORITE</div><h1>发现资源</h1><p>查找 RE0 的 115 资源，按积分和版本选择。</p></div></div>
-        <form id="search-form" class="search-bar"><span class="search-glyph">⌕</span><input id="search-query" placeholder="搜索片名，或输入 tmdb:693134" aria-label="片名或 TMDB ID" required maxlength="300"><select id="search-type" aria-label="媒体类型"><option value="movie">电影</option><option value="tv">剧集</option></select><button class="button primary" type="submit">搜索资源</button></form>
-        <div class="result-toolbar"><span id="search-status">输入片名开始搜索。按片名搜索需要在设置中配置 TMDB Key。</span><select id="quality-filter" aria-label="筛选画质"><option value="">所有画质</option><option value="2160">4K / 2160p</option><option value="1080">1080p</option></select></div>
-        <div id="resources-list" class="resource-grid"></div>
-      </section>
-      <section id="page-subscriptions" class="page hidden"><div class="page-heading"><div><div class="eyebrow">SET IT. LET IT FIND YOU.</div><h1>我的订阅</h1><p>版本筛选、积分上限和目标目录，一次设好。</p></div><button class="button primary" data-action="new-sub">＋ 新建订阅</button></div><div id="subscription-list" class="subscription-grid"></div></section>
-      <section id="page-tasks" class="page hidden"><div class="page-heading"><div><div class="eyebrow">FROM RE0 TO YOUR DRIVE</div><h1>转存任务</h1><p>查看最近 200 条任务，每 5 秒自动刷新。</p></div><button class="button secondary" id="refresh-jobs">↻ 刷新</button></div><div class="panel table-panel"><div class="table-scroll"><table><thead><tr><th>资源</th><th>目标目录</th><th>状态</th><th>结果</th><th>时间 / 操作</th></tr></thead><tbody id="jobs-list"></tbody></table></div></div></section>
-      <section id="page-settings" class="page hidden"><div class="page-heading"><div><div class="eyebrow">MAKE THE CONNECTION</div><h1>连接与设置</h1><p>连接 RE0 中转服务和你的 115 网盘。</p></div></div>
-        <form id="settings-form">
-          <div class="settings-layout"><div class="settings-main">
-            <section class="panel settings-panel"><div class="panel-heading"><h2><span class="section-icon">r0</span> RE0 中转 API</h2><span id="re0-state" class="pill neutral">未检查</span></div><div class="form-grid"><label>连接模式<select name="mode"><option value="demo">演示模式</option><option value="gateway">中转 API</option></select></label><label>服务地址<input name="re0_base_url" type="url" required></label><label class="full">安装标识<input name="install_id" required><small>它对应这份授权。更换标识后需要重新授权。</small></label><label class="full">签名密钥<input name="re0_shared_secret" type="password" autocomplete="new-password" placeholder="填写中转服务的 HMAC 签名密钥"><small id="secret-hint">保存后不会返回到浏览器。</small><label class="credential-clear"><input name="clear_re0_secret" type="checkbox">清除已保存的密钥</label></label></div><div class="button-row"><button class="button secondary" type="button" id="authorize">授权 RE0 ↗</button><button class="button ghost" type="button" id="check-re0">检查授权</button><button class="button ghost" type="button" id="checkin">今日签到</button></div><p class="helper-text" id="account-message">先保存配置，再完成授权。</p></section>
-            <section class="panel settings-panel"><div class="panel-heading"><h2><span class="section-icon">115</span> 115 网盘</h2><span id="cookie-state" class="pill neutral">未配置</span></div><label>115 Cookie<textarea name="cookie_115" rows="3" autocomplete="off" placeholder="UID=…; CID=…; SEID=…"></textarea><small id="cookie-hint">使用你希望接收分享的 115 账号。</small><label class="credential-clear"><input name="clear_115_cookie" type="checkbox">清除已保存的 Cookie</label></label><div class="form-grid"><label>默认目标目录 ID<input name="default_target_cid" inputmode="numeric" pattern="[0-9]{1,20}" required><small>0 表示根目录。每条订阅可以设置自己的目录。</small></label><label>默认积分上限<input name="default_max_points" type="number" min="0" max="1000" required><small>转存前重新查询费用，费用未知时跳过。</small></label></div></section>
-            <section class="panel settings-panel"><div class="panel-heading"><h2>搜索与自动化</h2></div><label>TMDB API Key<input name="tmdb_api_key" type="password" autocomplete="new-password" placeholder="用于把片名匹配到 TMDB ID"><small id="tmdb-hint">未配置时仍可用 TMDB ID 查询资源。</small><label class="credential-clear"><input name="clear_tmdb_key" type="checkbox">清除已保存的 TMDB Key</label></label><label class="checkbox-label"><input name="checkin_enabled" type="checkbox"><span>每天自动正常签到<small>按服务本地时区执行，失败后至少等待一小时。</small></span></label></section>
-          </div><aside class="panel setup-guide"><span class="eyebrow">READY IN THREE STEPS</span><h3>接下来怎么做</h3><ol><li><strong>保存中转配置</strong><p>填写签名密钥，保留或导入已有安装标识。</p></li><li><strong>授权，再连接 115</strong><p>在 RE0 完成授权，把目标 115 账号的 Cookie 保存到这里。</p></li><li><strong>创建第一条订阅</strong><p>选好版本、积分上限和接收目录。</p></li></ol><div class="guide-note">凭据加密保存在本地。备份时请一同保存数据库和 master.key。</div></aside></div>
-          <div class="save-bar"><span id="settings-save-hint">密钥与 Cookie 留空会保留已保存的值。</span><button class="button primary" type="submit">保存配置</button></div>
-        </form>
-      </section>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="theme-color" content="#152621" />
+    <title>RE0Drive · 订阅与转存</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script defer src="/app.js"></script>
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="sidebar">
+        <a class="brand" href="#overview"
+          ><span class="brand-mark">r<span>0</span></span
+          ><span>RE0Drive<small>THE QUIET COLLECTION</small></span></a
+        >
+        <div class="nav-label">工作空间</div>
+        <nav aria-label="主导航">
+          <button class="nav-item active" data-page="overview">
+            <span class="nav-icon">▦</span>工作台
+          </button>
+          <button class="nav-item" data-page="resources">
+            <span class="nav-icon">⌕</span>发现资源
+          </button>
+          <button class="nav-item" data-page="subscriptions">
+            <span class="nav-icon">◉</span>我的订阅<span
+              id="nav-sub-count"
+              class="nav-count"
+              >0</span
+            >
+          </button>
+          <button class="nav-item" data-page="tasks">
+            <span class="nav-icon">⇩</span>转存任务
+          </button>
+          <button class="nav-item" data-page="settings">
+            <span class="nav-icon">⚙</span>连接与设置
+          </button>
+        </nav>
+        <div class="sidebar-bottom">
+          <div class="side-account">
+            <span class="account-dot"></span>
+            <div>
+              <strong id="side-mode">尚未配置</strong><small>RE0 → 115</small>
+            </div>
+          </div>
+          <div class="sidebar-footer">
+            <span>v0.1.0</span
+            ><button id="logout" class="text-button">退出登录 ↗</button>
+          </div>
+        </div>
+      </aside>
+      <main>
+        <header class="topbar">
+          <div class="breadcrumb">
+            个人媒体空间 <span>/</span> <strong id="page-label">工作台</strong>
+          </div>
+          <div class="topbar-right">
+            <span class="server-badge"><i></i>服务已启动</span
+            ><span class="avatar">R</span>
+          </div>
+        </header>
+        <div id="demo-banner" class="demo-banner hidden">
+          演示模式 · 使用示例资源，签到与转存均不会发送外部请求。<button
+            data-page="settings"
+          >
+            连接真实账号 →
+          </button>
+        </div>
+        <div class="content">
+          <section id="page-overview" class="page">
+            <div class="page-heading">
+              <div>
+                <div class="eyebrow">YOUR COLLECTION, ON AUTOPILOT</div>
+                <h1>想看的，都有着落。</h1>
+                <p>发现资源，设好规则，剩下的交给订阅。</p>
+              </div>
+              <button class="button primary" data-action="new-sub">
+                <span>＋</span>新建订阅
+              </button>
+            </div>
+            <div class="stats-grid">
+              <div class="stat">
+                <span>运行中的订阅 <i>◉</i></span
+                ><strong id="stat-sub">0</strong><small>持续检查更新</small>
+              </div>
+              <div class="stat">
+                <span>等待处理 <i>⇣</i></span
+                ><strong id="stat-pending">0</strong
+                ><small>持久化任务队列</small>
+              </div>
+              <div class="stat">
+                <span>成功转存 <i>✓</i></span
+                ><strong id="stat-success">0</strong
+                ><small>真实账号已接收的任务</small>
+              </div>
+              <div class="stat">
+                <span>需要核对 <i>◎</i></span
+                ><strong id="stat-review">0</strong
+                ><small>查看外部操作结果</small>
+              </div>
+            </div>
+            <div class="discover-card">
+              <div class="discover-copy">
+                <span class="pill light">DISCOVER / RE0</span>
+                <h2>下一部好片，<br />从这里开始。</h2>
+                <p>搜索片名或 TMDB ID，找到适合你的版本。</p>
+                <button class="button white" data-page="resources">
+                  发现资源 <span>↗</span>
+                </button>
+              </div>
+              <div class="abstract-art" aria-hidden="true">
+                <div class="art-ring r1"></div>
+                <div class="art-ring r2"></div>
+                <div class="art-orbit"></div>
+                <div class="art-card">
+                  <div class="film-lines"></div>
+                  <span>115</span><small>YOUR NEXT FAVORITE</small>
+                </div>
+                <span class="art-star s1">✦</span
+                ><span class="art-star s2">✦</span
+                ><span class="art-label">A SPACE FOR STORIES.</span>
+              </div>
+            </div>
+            <div class="two-column">
+              <section class="panel">
+                <div class="panel-heading">
+                  <h2>
+                    订阅动态 <span id="rule-count" class="subtle">0</span>
+                  </h2>
+                  <button class="text-button green" data-page="subscriptions">
+                    查看全部 ↗
+                  </button>
+                </div>
+                <div id="overview-rules"></div>
+              </section>
+              <section class="panel">
+                <div class="panel-heading">
+                  <h2>最近活动</h2>
+                  <span class="subtle">自动更新</span>
+                </div>
+                <div id="activity-list"></div>
+              </section>
+            </div>
+            <div class="footnote">
+              轻量运行，持续收集。<span>Rust · Axum · SQLite</span>
+            </div>
+          </section>
+          <section id="page-resources" class="page hidden">
+            <div class="page-heading">
+              <div>
+                <div class="eyebrow">FIND YOUR NEXT FAVORITE</div>
+                <h1>发现资源</h1>
+                <p>查找 RE0 的 115 资源，按积分和版本选择。</p>
+              </div>
+            </div>
+            <form id="search-form" class="search-bar">
+              <span class="search-glyph">⌕</span
+              ><input
+                id="search-query"
+                placeholder="搜索片名，或输入 tmdb:693134"
+                aria-label="片名或 TMDB ID"
+                required
+                maxlength="300"
+              /><select id="search-type" aria-label="媒体类型">
+                <option value="movie">电影</option>
+                <option value="tv">剧集</option></select
+              ><button class="button primary" type="submit">搜索资源</button>
+            </form>
+            <div class="result-toolbar">
+              <span id="search-status"
+                >输入片名开始搜索。按片名搜索需要在设置中配置 TMDB Key。</span
+              ><select id="quality-filter" aria-label="筛选画质">
+                <option value="">所有画质</option>
+                <option value="2160">4K / 2160p</option>
+                <option value="1080">1080p</option>
+              </select>
+            </div>
+            <div id="resources-list" class="resource-grid"></div>
+          </section>
+          <section id="page-subscriptions" class="page hidden">
+            <div class="page-heading">
+              <div>
+                <div class="eyebrow">SET IT. LET IT FIND YOU.</div>
+                <h1>我的订阅</h1>
+                <p>版本筛选、积分上限和目标目录，一次设好。</p>
+              </div>
+              <button class="button primary" data-action="new-sub">
+                ＋ 新建订阅
+              </button>
+            </div>
+            <div id="subscription-list" class="subscription-grid"></div>
+          </section>
+          <section id="page-tasks" class="page hidden">
+            <div class="page-heading">
+              <div>
+                <div class="eyebrow">FROM RE0 TO YOUR DRIVE</div>
+                <h1>转存任务</h1>
+                <p>查看最近 200 条任务，每 5 秒自动刷新。</p>
+              </div>
+              <button class="button secondary" id="refresh-jobs">↻ 刷新</button>
+            </div>
+            <div class="panel table-panel">
+              <div class="table-scroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>资源</th>
+                      <th>目标目录</th>
+                      <th>状态</th>
+                      <th>结果</th>
+                      <th>时间 / 操作</th>
+                    </tr>
+                  </thead>
+                  <tbody id="jobs-list"></tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+          <section id="page-settings" class="page hidden">
+            <div class="page-heading">
+              <div>
+                <div class="eyebrow">MAKE THE CONNECTION</div>
+                <h1>连接与设置</h1>
+                <p>连接 RE0 中转服务和你的 115 网盘。</p>
+              </div>
+            </div>
+            <form id="settings-form">
+              <div class="settings-layout">
+                <div class="settings-main">
+                  <section class="panel settings-panel">
+                    <div class="panel-heading">
+                      <h2><span class="section-icon">r0</span> RE0 中转 API</h2>
+                      <span id="re0-state" class="pill neutral">未检查</span>
+                    </div>
+                    <div class="form-grid">
+                      <label
+                        >连接模式<select name="mode">
+                          <option value="demo">演示模式</option>
+                          <option value="gateway">中转 API</option>
+                        </select></label
+                      ><label
+                        >服务地址<input
+                          name="re0_base_url"
+                          type="url"
+                          required /></label
+                      ><label class="full"
+                        >安装标识<input name="install_id" required /><small
+                          >它对应这份授权。更换标识后需要重新授权。</small
+                        ></label
+                      ><label class="full"
+                        >签名密钥<input
+                          name="re0_shared_secret"
+                          type="password"
+                          autocomplete="new-password"
+                          placeholder="填写中转服务的 HMAC 签名密钥"
+                        /><small id="secret-hint"
+                          >保存后不会返回到浏览器。</small
+                        ><span class="credential-clear"
+                          ><input
+                            aria-label="清除签名密钥"
+                            name="clear_re0_secret"
+                            type="checkbox"
+                          />清除已保存的密钥</span
+                        ></label
+                      >
+                    </div>
+                    <div class="button-row">
+                      <button
+                        class="button secondary"
+                        type="button"
+                        id="authorize"
+                      >
+                        授权 RE0 ↗</button
+                      ><button
+                        class="button ghost"
+                        type="button"
+                        id="check-re0"
+                      >
+                        检查授权</button
+                      ><button class="button ghost" type="button" id="checkin">
+                        今日签到
+                      </button>
+                    </div>
+                    <p class="helper-text" id="account-message">
+                      先保存配置，再完成授权。
+                    </p>
+                  </section>
+                  <section class="panel settings-panel">
+                    <div class="panel-heading">
+                      <h2><span class="section-icon">115</span> 115 网盘</h2>
+                      <span id="cookie-state" class="pill neutral">未配置</span>
+                    </div>
+                    <label
+                      >115 Cookie<textarea
+                        name="cookie_115"
+                        rows="3"
+                        autocomplete="off"
+                        placeholder="UID=…; CID=…; SEID=…"
+                      ></textarea
+                      ><small id="cookie-hint"
+                        >使用你希望接收分享的 115 账号。</small
+                      ><span class="credential-clear"
+                        ><input
+                          aria-label="清除 115 Cookie"
+                          name="clear_115_cookie"
+                          type="checkbox"
+                        />清除已保存的 Cookie</span
+                      ></label
+                    >
+                    <div class="form-grid">
+                      <label
+                        >默认目标目录 ID<input
+                          name="default_target_cid"
+                          inputmode="numeric"
+                          pattern="[0-9]{1,20}"
+                          required
+                        /><small
+                          >0 表示根目录。每条订阅可以设置自己的目录。</small
+                        ></label
+                      ><label
+                        >默认积分上限<input
+                          name="default_max_points"
+                          type="number"
+                          min="0"
+                          max="1000"
+                          required
+                        /><small
+                          >转存前重新查询费用，费用未知时跳过。</small
+                        ></label
+                      >
+                    </div>
+                  </section>
+                  <section class="panel settings-panel">
+                    <div class="panel-heading"><h2>搜索与自动化</h2></div>
+                    <label
+                      >TMDB API Key<input
+                        name="tmdb_api_key"
+                        type="password"
+                        autocomplete="new-password"
+                        placeholder="用于把片名匹配到 TMDB ID"
+                      /><small id="tmdb-hint"
+                        >未配置时仍可用 TMDB ID 查询资源。</small
+                      ><span class="credential-clear"
+                        ><input
+                          aria-label="清除 TMDB Key"
+                          name="clear_tmdb_key"
+                          type="checkbox"
+                        />清除已保存的 TMDB Key</span
+                      ></label
+                    ><label class="checkbox-label"
+                      ><input name="checkin_enabled" type="checkbox" /><span
+                        >每天自动正常签到<small
+                          >按服务本地时区执行，失败后至少等待一小时。</small
+                        ></span
+                      ></label
+                    >
+                  </section>
+                </div>
+                <aside class="panel setup-guide">
+                  <span class="eyebrow">READY IN THREE STEPS</span>
+                  <h3>接下来怎么做</h3>
+                  <ol>
+                    <li>
+                      <strong>保存中转配置</strong>
+                      <p>填写签名密钥，保留或导入已有安装标识。</p>
+                    </li>
+                    <li>
+                      <strong>授权，再连接 115</strong>
+                      <p>
+                        在 RE0 完成授权，把目标 115 账号的 Cookie 保存到这里。
+                      </p>
+                    </li>
+                    <li>
+                      <strong>创建第一条订阅</strong>
+                      <p>选好版本、积分上限和接收目录。</p>
+                    </li>
+                  </ol>
+                  <div class="guide-note">
+                    凭据加密保存在本地。备份时请一同保存数据库和 master.key。
+                  </div>
+                </aside>
+              </div>
+              <div class="save-bar">
+                <span id="settings-save-hint"
+                  >密钥与 Cookie 留空会保留已保存的值。</span
+                ><button class="button primary" type="submit">保存配置</button>
+              </div>
+            </form>
+          </section>
+        </div>
+      </main>
     </div>
-  </main>
-</div>
-<dialog id="subscription-dialog"><form id="subscription-form"><div class="dialog-heading"><div><span class="eyebrow">A NEW CONNECTION</span><h2 id="subscription-title">新建订阅</h2></div><button type="button" class="icon-button" data-close="subscription-dialog" aria-label="关闭">×</button></div><input name="id" type="hidden"><div class="form-grid"><label class="full">订阅名称<input name="name" placeholder="例如：沙丘 4K 收藏" required maxlength="120"></label><label class="full">片名 / TMDB ID<input name="query" placeholder="建议使用 tmdb:693134 精确订阅" required maxlength="300"></label><label>媒体类型<select name="media_type"><option value="movie">电影</option><option value="tv">剧集</option></select></label><label>画质偏好<select name="quality"><option value="">不限</option><option value="2160">4K / 2160p</option><option value="1080">1080p</option><option value="REMUX">REMUX</option></select></label><label>接收目录 ID<input name="target_cid" inputmode="numeric" pattern="[0-9]{1,20}" required></label><label>最多使用积分<input name="max_points" type="number" min="0" max="1000" required></label><label>必须包含<input name="include_keywords" placeholder="HDR, x265（全部满足）"></label><label>排除关键词<input name="exclude_keywords" placeholder="预告, 枪版"></label><label class="full">检查间隔<select name="interval_minutes"><option value="30">每 30 分钟</option><option value="60">每小时</option><option value="360">每 6 小时</option><option value="1440">每天</option></select></label></div><label class="checkbox-label"><input type="checkbox" name="auto_transfer" checked><span>符合规则后自动解锁并转存<small>仅处理 115 资源，每次最多新增 10 个任务。</small></span></label><div class="dialog-actions"><button class="button secondary" type="button" data-close="subscription-dialog">取消</button><button class="button primary" type="submit">保存订阅</button></div></form></dialog>
-<dialog id="transfer-dialog"><form id="transfer-form"><div class="dialog-heading"><div><span class="eyebrow">ADD TO YOUR COLLECTION</span><h2>转存到 115</h2></div><button type="button" class="icon-button" data-close="transfer-dialog" aria-label="关闭">×</button></div><p id="transfer-title" class="transfer-title"></p><div class="form-grid"><label>目标目录 ID<input name="target_cid" inputmode="numeric" pattern="[0-9]{1,20}" required></label><label>积分上限<input name="max_points" type="number" min="0" max="1000" required></label></div><p class="helper-text">转存前会重新检查积分。超过上限或费用未知时跳过。</p><div class="dialog-actions"><button class="button secondary" type="button" data-close="transfer-dialog">取消</button><button class="button primary" type="submit">加入转存队列</button></div></form></dialog>
-<dialog id="auth-dialog"><form id="auth-form"><span class="brand-mark">r<span>0</span></span><div class="eyebrow">WELCOME TO YOUR SPACE</div><h1 id="auth-title">创建你的工作空间</h1><p id="auth-description">设置管理员账号，开始管理订阅。</p><label>用户名<input name="username" autocomplete="username" required maxlength="64"></label><label>密码<input name="password" type="password" autocomplete="current-password" minlength="8" maxlength="128" required></label><p id="auth-error" class="form-error" role="alert"></p><button class="button primary" type="submit">进入工作空间 →</button><small>账号和订阅数据仅保存在这台服务器。</small></form></dialog>
-<div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
-</body></html>
+    <dialog id="subscription-dialog">
+      <form id="subscription-form">
+        <div class="dialog-heading">
+          <div>
+            <span class="eyebrow">A NEW CONNECTION</span>
+            <h2 id="subscription-title">新建订阅</h2>
+          </div>
+          <button
+            type="button"
+            class="icon-button"
+            data-close="subscription-dialog"
+            aria-label="关闭"
+          >
+            ×
+          </button>
+        </div>
+        <input name="id" type="hidden" />
+        <div class="form-grid">
+          <label class="full"
+            >订阅名称<input
+              name="name"
+              placeholder="例如：沙丘 4K 收藏"
+              required
+              maxlength="120" /></label
+          ><label class="full"
+            >片名 / TMDB ID<input
+              name="query"
+              placeholder="建议使用 tmdb:693134 精确订阅"
+              required
+              maxlength="300" /></label
+          ><label
+            >媒体类型<select name="media_type">
+              <option value="movie">电影</option>
+              <option value="tv">剧集</option>
+            </select></label
+          ><label
+            >画质偏好<select name="quality">
+              <option value="">不限</option>
+              <option value="2160">4K / 2160p</option>
+              <option value="1080">1080p</option>
+              <option value="REMUX">REMUX</option>
+            </select></label
+          ><label
+            >接收目录 ID<input
+              name="target_cid"
+              inputmode="numeric"
+              pattern="[0-9]{1,20}"
+              required /></label
+          ><label
+            >最多使用积分<input
+              name="max_points"
+              type="number"
+              min="0"
+              max="1000"
+              required /></label
+          ><label
+            >必须包含<input
+              name="include_keywords"
+              placeholder="HDR, x265（全部满足）" /></label
+          ><label
+            >排除关键词<input
+              name="exclude_keywords"
+              placeholder="预告, 枪版" /></label
+          ><label class="full"
+            >检查间隔<select name="interval_minutes">
+              <option value="30">每 30 分钟</option>
+              <option value="60">每小时</option>
+              <option value="360">每 6 小时</option>
+              <option value="1440">每天</option>
+            </select></label
+          >
+        </div>
+        <label class="checkbox-label"
+          ><input type="checkbox" name="auto_transfer" checked /><span
+            >符合规则后自动解锁并转存<small
+              >仅处理 115 资源，每次最多新增 10 个任务。</small
+            ></span
+          ></label
+        >
+        <div class="dialog-actions">
+          <button
+            class="button secondary"
+            type="button"
+            data-close="subscription-dialog"
+          >
+            取消</button
+          ><button class="button primary" type="submit">保存订阅</button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="transfer-dialog">
+      <form id="transfer-form">
+        <div class="dialog-heading">
+          <div>
+            <span class="eyebrow">ADD TO YOUR COLLECTION</span>
+            <h2>转存到 115</h2>
+          </div>
+          <button
+            type="button"
+            class="icon-button"
+            data-close="transfer-dialog"
+            aria-label="关闭"
+          >
+            ×
+          </button>
+        </div>
+        <p id="transfer-title" class="transfer-title"></p>
+        <div class="form-grid">
+          <label
+            >目标目录 ID<input
+              name="target_cid"
+              inputmode="numeric"
+              pattern="[0-9]{1,20}"
+              required /></label
+          ><label
+            >积分上限<input
+              name="max_points"
+              type="number"
+              min="0"
+              max="1000"
+              required
+          /></label>
+        </div>
+        <p class="helper-text">
+          转存前会重新检查积分。超过上限或费用未知时跳过。
+        </p>
+        <div class="dialog-actions">
+          <button
+            class="button secondary"
+            type="button"
+            data-close="transfer-dialog"
+          >
+            取消</button
+          ><button class="button primary" type="submit">加入转存队列</button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="auth-dialog">
+      <form id="auth-form">
+        <span class="brand-mark">r<span>0</span></span>
+        <div class="eyebrow">WELCOME TO YOUR SPACE</div>
+        <h1 id="auth-title">创建你的工作空间</h1>
+        <p id="auth-description">设置管理员账号，开始管理订阅。</p>
+        <label
+          >用户名<input
+            name="username"
+            autocomplete="username"
+            required
+            maxlength="64" /></label
+        ><label
+          >密码<input
+            name="password"
+            type="password"
+            autocomplete="current-password"
+            minlength="8"
+            maxlength="128"
+            required
+        /></label>
+        <p id="auth-error" class="form-error" role="alert"></p>
+        <button class="button primary" type="submit">进入工作空间 →</button
+        ><small>账号和订阅数据仅保存在这台服务器。</small>
+      </form>
+    </dialog>
+    <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+  </body>
+</html>
