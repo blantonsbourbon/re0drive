@@ -7,8 +7,9 @@
 ## 功能
 
 - 片名搜索（配置 TMDB Key），或直接使用 `tmdb:693134` / 数字 ID 搜索。
-- 电影、剧集订阅；版本、包含/排除关键词、积分上限、目标目录和检查间隔。
-- 每条订阅每次最多新增 10 个任务，默认每 30 分钟检查。
+- 搜索结果保留中转返回的全部版本信息：`pan_type`、`share_size`、`video_resolution`/`source`/`subtitle_language`/`subtitle_type`（数组原样）、积分、`remark`。非 115 资源（夸克、百度、阿里、迅雷、189、139、ED2K…）照常列出，但 `selectable:false`、没有转存按钮。交互搜索**不按积分上限过滤**。
+- 电影、剧集订阅：定时检查并把匹配的 115 版本记为“候选”，**从不自动解锁/转存**（包括 0 积分资源和旧的 `auto_transfer=true` 订阅），由人或 Hermes 选定版本后再提交任务。订阅默认积分上限 20，`auto_transfer` 默认关闭且已不生效。
+- 接收成功后列出目标目录，按文件名匹配出**本地 fid**（目录为本地 cid）写入任务结果，供 Hermes 自行移动整理；本 App 不移动文件。
 - RE0 浏览器授权、授权状态查询、每日正常签到。
 - 查询最新积分 → 解锁分享 → 115 顶层文件/目录分页读取 → 接收分享。
 - 同一账号、资源和目标目录去重。成功任务保留；未发生解锁的“已跳过”任务可在后续匹配时重新排队。
@@ -71,7 +72,7 @@ docker compose start re0drive
 3. 填写目标 115 账号的 Cookie，例如 `UID=…; CID=…; SEID=…; KID=…`。这里只使用 Cookie 分享接收接口，不申请 115 OpenAPI。
 4. 目标目录 ID 为 `0` 时接收到根目录。已有目录 ID 可从 115 的目录页面 URL 获取。
 5. 配置 TMDB API Key可按片名搜索；不配置时仍可用数字 TMDB ID 查询。
-6. 搜索资源手动转存，或创建自动转存订阅。
+6. 搜索资源并选择版本转存；订阅只列候选版本。
 
 Cookie 失效时需要在设置中更新。更换中转地址、安装标识、签名密钥、115 Cookie 或连接模式后，旧队列不会继续使用新的账号上下文；请重新创建任务。
 
@@ -110,16 +111,68 @@ docker compose up -d --build
 
 `queued → checking → unlocking → transferring → success`。检查阶段出错为 `failed`，可重试。解锁或接收响应丢失、不完整、服务重启中断写入时为 `needs_review`，需要在 RE0 和 115 核对后再手工重试。停用或删除订阅时，尚未执行的任务会跳过；已开始的外部请求会完成。
 
-当前实现支持 **115 分享链接转存**。ED2K 离线任务、字幕筛选、整季/单集语义、115 目录整理和多账号自动切换不在本版范围内；版本与关键词筛选作用于资源标题/画质字段。
+当前实现支持 **115 分享链接转存**。ED2K 只列出（`selectable:false`），离线下载需单独确认流程，未实现；整季/单集语义、115 目录整理（由 Hermes 负责移动）和多账号自动切换不在本版范围内；订阅的版本与关键词筛选作用于标题、画质、分辨率、来源、字幕和备注。
+
+## Hermes / 机器调用 API
+
+Hermes 用**机器令牌**调用，不依赖浏览器 Cookie：
+
+1. 登录网页 → 连接与设置 → **机器令牌** → “生成 / 轮换令牌”。令牌形如 `r0d_` + 64 位十六进制，**只显示一次**；服务端只保存 SHA-256 哈希和前 10 位前缀。再次生成会让旧令牌立即失效，“撤销”则删除。（也可用会话调用 `POST /api/machine-token`，需 `X-Re0drive-Request: 1`；`GET` 只返回前缀与使用时间，`DELETE` 撤销。）
+2. 请求头 `Authorization: Bearer <token>`。带 Bearer 的请求不需要 `X-Re0drive-Request`；一旦带了 `Authorization` 头就只校验令牌，不回落到 Cookie。
+3. 令牌**只能**访问：`POST /api/resources/search`、`GET /api/jobs`、`POST /api/jobs`、`GET /api/jobs/{id}`。设置、订阅、账号、令牌管理等其余接口一律 401。
+
+```sh
+export RE0DRIVE=http://127.0.0.1:8787 TOKEN=r0d_...   # 不要把令牌写进仓库或日志
+
+# 只查这一个 TMDB ID（数字 query、"tmdb:550" 或 tmdb_id 字段均可；不会混入片名搜索的其他结果）
+curl -s -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"tmdb_id":550,"media_type":"movie"}' $RE0DRIVE/api/resources/search
+# 片名搜索：合并 TMDB 前 4 个结果（需在设置中配置 TMDB Key）
+#   -d '{"query":"搏击俱乐部","media_type":"movie"}'
+
+# 选定版本后提交（resource 原样传回搜索结果中的对象；target_cid 可省略 = 115 根目录 0；
+# max_points 可省略 = 该版本标价，解锁前会重新查询，实际价格更高则跳过、不解锁）
+curl -s -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"resource":{...搜索结果中的一项...},"target_cid":"","max_points":2}' $RE0DRIVE/api/jobs
+
+# 轮询任务
+curl -s -H "Authorization: Bearer $TOKEN" $RE0DRIVE/api/jobs/<job_id>
+```
+
+搜索响应：`{"mode","total","resources":[...]}`，每项：
+
+| 字段 | 说明 |
+|---|---|
+| `slug` | 完整 slug（不截断） |
+| `title` | 标题 |
+| `pan_type` | 中转原值（`115`、`quark`、`ed2k`…） |
+| `provider` | 归一化：含 115 → `"115"`，否则为小写原值 |
+| `selectable` | 仅 115 为 `true`；其余（含 ED2K，待单独确认流程）为 `false`，提交会被 400 拒绝 |
+| `share_size`、`video_resolution`、`source`、`subtitle_language`、`subtitle_type` | 原样（多为数组） |
+| `unlock_points`、`is_unlocked`、`remark` | 积分（未知为 `null`）、是否已拥有、备注 |
+| `quality`、`size`、`tmdb_id`、`media_type` | 兼容字段（扁平文本） |
+
+中转返回 `data:[]`/`total:0` 时得到 `"resources":[]`，**不会**用演示数据填充。
+
+任务（`job`）字段：`id`、`status`（`queued/checking/unlocking/transferring/success/failed/skipped/needs_review`）、`message`、`target_cid`、`max_points`、`resource`，以及成功后的 `received`：
+
+```json
+"received": [
+  {"name":"Movie.2160p.mkv","is_dir":false,"share_id":"111","local_id":"9001","parent_cid":"3482983666605360884","size":62599999999},
+  {"name":"Extras","is_dir":true,"share_id":"222","local_id":"9002","parent_cid":"3482983666605360884","size":0}
+]
+```
+
+`share_id` 是分享内的 id（文件用 snap 的 `fid`，目录用 snap 的 `cid`），`local_id` 是接收后在目标目录里的 id（文件为列表中的 `fid`，目录为其自身 `cid`；不会把文件所在目录的 `cid` 当作文件 id）。按名称匹配，115 尚未完成复制时会短暂重试；未匹配到时 `local_id` 为空，`message` 会写明“本地已定位 m/n 项”。目标目录列表失败不影响接收成功的判定。
 
 ## 验证
 
 ```sh
-cargo test --locked                       # 21 项：协议向量 + 本地 HTTP 流程 + 扫码登录
-cargo build --release --locked && tests/smoke.sh   # 42 项端到端冒烟测试
+cargo test --locked                       # 28 项：协议向量 + 本地 HTTP 流程 + 扫码登录 + Hermes 验收（tests/hermes.rs）
+cargo build --release --locked && tests/smoke.sh   # 58 项端到端冒烟测试
 ```
 
-`tests/smoke.sh` 自带环境：在随机本地端口启动 `tests/mock_upstream.py`（RE0 中转 + 115 + TMDB 替身，用测试密钥校验每个请求的 HMAC）和一个全新数据目录的 RE0Drive，所有外部地址都指向替身；同时把代理设为一个关闭的本地端口作为“绊线”，任何意外的非本机请求都会直接失败，不会离开本机。覆盖：115 / RE0 扫码登录、静态资源与 CSP、管理员/会话/CSRF、演示模式、写入式凭据与加密存储、签名、授权链接、签到、搜索排序、积分上限拦截、115 分页接收、订阅自动转存、停用/删除、退出。
+`tests/smoke.sh` 自带环境：在随机本地端口启动 `tests/mock_upstream.py`（RE0 中转 + 115 + TMDB 替身，用测试密钥校验每个请求的 HMAC）和一个全新数据目录的 RE0Drive，所有外部地址都指向替身；同时把代理设为一个关闭的本地端口作为“绊线”，任何意外的非本机请求都会直接失败，不会离开本机。覆盖：115 / RE0 扫码登录、静态资源与 CSP、管理员/会话/CSRF、演示模式、写入式凭据与加密存储、签名、授权链接、签到、搜索排序与完整字段（含数组、非 115 不可选）、空结果不回落演示数据、积分上限拦截、115 分页接收与本地 fid 回填、机器令牌（只显示一次、哈希存储、轮换失效、权限范围）、订阅只列候选不解锁、停用/删除、退出。
 
 协议测试对照原客户端回放中的已知 HMAC 向量；本地 HTTP 集成测试覆盖真实序列化请求、积分拦截、115 多页文件/目录接收、去重、异常结果保留、重启恢复、会话与配置加密。
 
