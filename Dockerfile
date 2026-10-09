@@ -1,9 +1,12 @@
 FROM rust:1.85.1-bookworm AS build
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
+# Build dependencies once in their own layer (cached across source-only changes).
+RUN mkdir src && echo 'fn main() {}' > src/main.rs && touch src/lib.rs \
+    && cargo build --release --locked && rm -rf src target/release/re0drive* target/release/deps/re0drive* target/release/deps/libre0drive* target/release/.fingerprint/re0drive*
 COPY src ./src
 COPY web ./web
-RUN cargo build --release --locked
+RUN touch src/main.rs src/lib.rs && cargo build --release --locked && test -x target/release/re0drive
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tzdata curl \

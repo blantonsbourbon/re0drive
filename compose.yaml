@@ -1,7 +1,10 @@
 services:
   re0drive:
-    build: .
-    image: re0drive:0.1.0
+    # Prebuilt multi-arch image (linux/amd64 + linux/arm64) from GitHub Actions.
+    # Pin a version instead of latest if you prefer, e.g. :0.1.0 or :sha-<7 chars>.
+    image: ${RE0DRIVE_IMAGE:-ghcr.io/blantonsbourbon/re0drive:latest}
+    # Optional: build locally from source instead (`docker compose up -d --build`).
+    # build: .
     restart: unless-stopped
     ports:
       - "${RE0DRIVE_HOST_BIND:-127.0.0.1}:8787:8787"

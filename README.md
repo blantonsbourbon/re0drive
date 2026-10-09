@@ -78,10 +78,26 @@ Cookie 失效时需要在设置中更新。更换中转地址、安装标识、�
 
 ## Docker / NAS
 
+GitHub Actions（`.github/workflows/docker.yml`）在推送到 `main`、推送 `v*` 标签或手动触发时，分别在原生 amd64 / arm64 runner 上构建并推送多架构镜像 `ghcr.io/blantonsbourbon/re0drive`：
+
+| 标签 | 来源 |
+|---|---|
+| `latest` | `main` 最新提交 |
+| `sha-<7位>` | 每次构建的提交 |
+| `1.2.3` / `1.2` / `1` | 推送 `v1.2.3` 标签（`v0.x` 不生成主版本号标签） |
+
+NAS 只需拉取镜像，不需要源码或 Rust 构建环境：
+
 ```sh
-cp .env.example .env
-docker compose up -d --build
+mkdir re0drive && cd re0drive
+# 取得 compose.yaml 和 .env.example（仓库为私有时，从仓库下载这两个文件复制到 NAS）
+cp .env.example .env            # 按需编辑；不要把 .env 提交到仓库
+docker login ghcr.io -u <GitHub 用户名>   # 密码处粘贴只含 read:packages 权限的 PAT（classic）
+docker compose pull && docker compose up -d
+# 更新：docker compose pull && docker compose up -d   （数据在命名卷中保留）
 ```
+
+镜像包默认是**私有**的（与仓库一致），NAS 必须先 `docker login ghcr.io`，使用只勾选 `read:packages` 的 Personal Access Token（classic）；凭据保存在 NAS 的 `~/.docker/config.json`。如果不介意公开镜像，也可以在 GitHub → Packages → re0drive → Package settings → Change visibility 设为 Public，之后无需登录即可拉取（镜像内不含任何密钥或 Cookie）。想固定版本时在 `.env` 设置 `RE0DRIVE_IMAGE=ghcr.io/blantonsbourbon/re0drive:sha-xxxxxxx`。本地从源码构建：取消 `compose.yaml` 中 `build: .` 的注释后执行 `docker compose up -d --build`。
 
 默认端口仅绑定 `127.0.0.1:8787`。在 NAS 局域网直接访问时，设置 `.env` 的 `RE0DRIVE_HOST_BIND=0.0.0.0` 后重建容器；通过 HTTPS 反向代理访问时设置 `RE0DRIVE_COOKIE_SECURE=1`，代理转发 `X-Forwarded-Proto: https`。先在自己的受控访问入口创建管理员。
 
