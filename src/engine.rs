@@ -1,4 +1,4 @@
-use crate::{error::{AppError, Result}, models::{Job, Resource, Settings, Subscription}, providers::{owned, points, valid_slug, Providers}, store::{now, Store}};
+use crate::{error::{AppError, Result}, models::{valid_cid, Job, Resource, Settings, Subscription}, providers::{owned, points, valid_slug, Providers}, store::{now, Store}};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
@@ -6,9 +6,10 @@ use tokio::sync::Mutex;
 
 pub struct Engine { pub store: Store, pub providers: Providers, pub config_lock: Mutex<()> }
 impl Engine {
-    pub fn new(store:Store)->Self {Self{store,providers:Providers::new(),config_lock:Mutex::new(())}}
+    pub fn new(store:Store)->Self {Self::with_providers(store,Providers::new())}
+    pub fn with_providers(store:Store,providers:Providers)->Self {Self{store,providers,config_lock:Mutex::new(())}}
     pub async fn enqueue(&self,resource:Resource,target_cid:String,max_points:i64,subscription_id:Option<String>)->Result<Option<Job>> {
-        if resource.provider!="115"||!valid_slug(&resource.slug){return Err(AppError::bad("资源标识或网盘类型无效"));}
+        if resource.provider!="115"||!valid_slug(&resource.slug)||!valid_cid(&target_cid)||!(0..=1000).contains(&max_points){return Err(AppError::bad("资源标识、网盘类型或转存配置无效"));}
         let s=self.store.settings().await?;
         let key=account_key(&s);
         let dedup=format!("{key}:{}:{target_cid}",resource.slug);
@@ -51,7 +52,7 @@ impl Engine {
             Err(e)=>format!("检查失败：{}",e.message),
             Ok(items)=> {
                 let current=self.store.subscriptions().await?.into_iter().find(|r|r.id==rule.id);
-                if !current.is_some_and(|r|r.enabled&&r.query==rule.query) {return Ok(());}
+                let Some(rule)=current.filter(|r|r.enabled&&r.query==rule.query&&r.media_type==rule.media_type) else{return Ok(());};
                 let matches=items.into_iter().filter(|r|rule.matches(r)).collect::<Vec<_>>();let count=matches.len();let mut queued=0;
                 if rule.auto_transfer {for resource in matches.into_iter().take(10){if self.enqueue(resource,rule.target_cid.clone(),rule.max_points,Some(rule.id.clone())).await?.is_some(){queued+=1;}}}
                 format!("匹配 {count} 项 · 新增 {queued} 个任务")

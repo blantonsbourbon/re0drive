@@ -98,15 +98,17 @@ async fn save_settings(State(app):State<App>,Json(v):Json<SettingsUpdate>)->Resu
     if !matches!(v.mode.as_str(),"demo"|"gateway"){return Err(AppError::bad("连接模式无效"));}
     let parsed=url::Url::parse(v.re0_base_url.trim()).map_err(|_|AppError::bad("中转 API 地址无效"))?;
     if !matches!(parsed.scheme(),"https"|"http")||parsed.host_str().is_none()||!parsed.username().is_empty()||parsed.password().is_some()||parsed.query().is_some()||parsed.fragment().is_some(){return Err(AppError::bad("请填写不含账号、查询或片段的中转 API 地址"));}
-    if !valid_cid(&v.default_target_cid)||!(0..=1000).contains(&v.default_max_points)||v.install_id.is_empty()||v.install_id.len()>200||v.cookie_115.contains(['\r','\n']){return Err(AppError::bad("目录、积分上限或账号配置无效"));}
+    if !valid_cid(&v.default_target_cid)||!(0..=1000).contains(&v.default_max_points)||v.install_id.is_empty()||v.install_id.len()>200||v.install_id.contains(['\r','\n'])||v.cookie_115.contains(['\r','\n']){return Err(AppError::bad("目录、积分上限或账号配置无效"));}
     let _guard=app.config_lock.lock().await;let mut s=app.store.settings().await?;
+    if s.mode!=v.mode||s.install_id!=v.install_id||s.re0_base_url!=v.re0_base_url.trim().trim_end_matches('/') {s.last_checkin_day.clear();}
     s.mode=v.mode;s.re0_base_url=v.re0_base_url.trim().trim_end_matches('/').into();s.install_id=v.install_id;s.default_target_cid=v.default_target_cid;s.default_max_points=v.default_max_points;s.checkin_enabled=v.checkin_enabled;
     for(target,value,clear)in[(&mut s.re0_shared_secret,v.re0_shared_secret,v.clear_re0_secret),(&mut s.tmdb_api_key,v.tmdb_api_key,v.clear_tmdb_key),(&mut s.cookie_115,v.cookie_115,v.clear_115_cookie)]{if clear{target.clear();}else if !value.trim().is_empty(){*target=value.trim().into();}}
     app.store.save_settings(&s).await?;app.store.activity("settings","账号和默认规则已更新").await?;Ok(Json(s.public()))
 }
 async fn dashboard(State(app):State<App>)->Result<Json<Value>>{
     let rules=app.store.subscriptions().await?;let jobs=app.store.jobs().await?;let logs=app.store.activities().await?;let s=app.store.settings().await?;
-    Ok(Json(json!({"settings":s.public(),"subscriptions":rules,"jobs":jobs,"activity":logs,"stats":{"subscriptions":rules.iter().filter(|r|r.enabled).count(),"pending":jobs.iter().filter(|j|matches!(j.status.as_str(),"queued"|"checking"|"unlocking"|"transferring")).count(),"success":jobs.iter().filter(|j|j.status=="success"&&j.mode!="demo").count(),"review":jobs.iter().filter(|j|j.status=="needs_review").count()}})))
+    let mut stats=app.store.job_stats().await?;stats["subscriptions"]=json!(rules.iter().filter(|r|r.enabled).count());
+    Ok(Json(json!({"settings":s.public(),"subscriptions":rules,"jobs":jobs,"activity":logs,"stats":stats})))
 }
 #[derive(Deserialize)]struct Search{query:String,media_type:String}
 async fn search(State(app):State<App>,Json(v):Json<Search>)->Result<Json<Value>>{

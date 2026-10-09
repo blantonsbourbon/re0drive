@@ -114,11 +114,18 @@ impl Store {
         self.db.call(move|c|{c.execute("UPDATE jobs SET status=?1,doc=?2 WHERE id=?3",params![status,doc,id])?;Ok(())}).await?;Ok(())
     }
     pub async fn recover_jobs(&self)->Result<()> {
-        for mut job in self.jobs().await? {
+        let active:Vec<Job>=self.db.call(|c|{let mut s=c.prepare("SELECT doc FROM jobs WHERE status IN ('checking','unlocking','transferring')")?;let rows=s.query_map([],|r|decode(r.get(0)?))?;Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)}).await?;
+        for mut job in active {
             if job.status=="checking" { job.status="queued".into();job.message="重启后恢复读取任务".into();self.save_job(&job).await?; }
             else if matches!(job.status.as_str(),"unlocking"|"transferring") { job.status="needs_review".into();job.message="服务重启中断了外部操作，请核对网盘和积分后处理".into();self.save_job(&job).await?; }
         }
         Ok(())
+    }
+    pub async fn job_stats(&self)->Result<serde_json::Value> {
+        Ok(self.db.call(|c| {
+            let(pending,success,review)=c.query_row("SELECT COALESCE(SUM(status IN ('queued','checking','unlocking','transferring')),0),COALESCE(SUM(status='success' AND json_extract(doc,'$.mode')!='demo'),0),COALESCE(SUM(status='needs_review'),0) FROM jobs",[],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?,r.get::<_,i64>(2)?)))?;
+            Ok(serde_json::json!({"pending":pending,"success":success,"review":review}))
+        }).await?)
     }
     pub async fn activity(&self,kind:&str,message:&str)->Result<()> {
         let kind=kind.to_string();let message=message.chars().take(500).collect::<String>();

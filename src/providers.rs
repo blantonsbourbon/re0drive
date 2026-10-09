@@ -3,17 +3,21 @@ use hmac::{Hmac, Mac};
 use reqwest::{Client, Method, Response};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeSet, time::Duration};
+use std::{collections::BTreeSet, sync::Arc, time::Duration};
 use url::Url;
 
 #[derive(Clone)]
-pub struct Providers { pub http: Client, share_base: String }
+pub struct Providers { pub http: Client, share_base: String, gateway_slots: Arc<tokio::sync::Semaphore> }
 impl Providers {
     pub fn new() -> Self {
-        Self { http: Client::builder().connect_timeout(Duration::from_secs(8)).timeout(Duration::from_secs(25)).pool_idle_timeout(Duration::from_secs(90)).redirect(reqwest::redirect::Policy::none()).user_agent("RE0Drive/0.1").build().expect("HTTP client"), share_base: std::env::var("RE0DRIVE_115_BASE_URL").unwrap_or_else(|_|"https://webapi.115.com".into()) }
+        Self::with_share_base("https://webapi.115.com".into())
+    }
+    pub fn with_share_base(share_base:String) -> Self {
+        Self { http: Client::builder().connect_timeout(Duration::from_secs(8)).timeout(Duration::from_secs(25)).pool_idle_timeout(Duration::from_secs(90)).redirect(reqwest::redirect::Policy::none()).user_agent("RE0Drive/0.1").build().expect("HTTP client"), share_base, gateway_slots:Arc::new(tokio::sync::Semaphore::new(4)) }
     }
     pub async fn gateway(&self,s:&Settings,method:Method,path:&str,body:Option<Value>)->Result<Value> {
         if s.re0_shared_secret.is_empty() { return Err(AppError::bad("请先在设置中配置中转 API 签名密钥")); }
+        let _slot=self.gateway_slots.acquire().await.map_err(|_|AppError::upstream("中转请求队列已关闭"))?;
         let mut url=Url::parse(&s.re0_base_url).map_err(|_|AppError::bad("中转地址无效"))?;
         url.set_path(path);url.set_query(None);url.set_fragment(None);
         let bytes=body.map(|v|serde_json::to_vec(&v).expect("JSON value")).unwrap_or_default();
@@ -40,7 +44,14 @@ impl Providers {
         let token=self.gateway(s,Method::GET,"/api/token/status",None).await?;
         let data=token.get("data").unwrap_or(&token);
         let authorized=data.get("has_access_token").or_else(||token.get("has_access_token")).and_then(Value::as_bool).unwrap_or(false);
-        let user=if authorized {self.gateway(s,Method::GET,"/api/me",None).await?.get("data").cloned().unwrap_or(Value::Null)} else {Value::Null};
+        let user=if authorized {
+            let raw=self.gateway(s,Method::GET,"/api/me",None).await?;
+            let data=raw.get("data").unwrap_or(&raw);let mut safe=serde_json::Map::new();
+            for key in ["nickname","username","name","points","point","credit","credits","level","group","user_group"] {
+                if let Some(v)=data.get(key).filter(|v|v.is_string()||v.is_number()){safe.insert(key.into(),v.clone());}
+            }
+            Value::Object(safe)
+        } else {Value::Null};
         Ok(json!({"demo":false,"authorized":authorized,"user":user}))
     }
     pub async fn checkin(&self,s:&Settings)->Result<Value> {
@@ -71,7 +82,7 @@ impl Providers {
         }
         let mut result=vec![];let mut seen=BTreeSet::new();
         while let Some(res)=tasks.join_next().await{for item in res.map_err(|_|AppError::upstream("资源查询任务失败"))??{if seen.insert(item.slug.clone()){result.push(item);}}}
-        result.sort_by_key(|r|(r.unlock_points.unwrap_or(i64::MAX),r.title.clone()));
+        result.sort_by_key(|r|(!r.is_unlocked,r.unlock_points.unwrap_or(i64::MAX),r.title.clone()));
         Ok(result)
     }
     pub async fn detail(&self,s:&Settings,slug:&str)->Result<Value> {
