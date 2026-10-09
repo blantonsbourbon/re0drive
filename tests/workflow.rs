@@ -222,6 +222,7 @@ fn resource() -> Resource {
         size: String::new(),
         tmdb_id: "123".into(),
         media_type: "movie".into(),
+        ..Default::default()
     }
 }
 #[tokio::test]
@@ -230,8 +231,9 @@ async fn signed_search_unlock_and_paginated_115_receive() {
     let (_dir, _srv, e) = harness(f.clone()).await;
     let s = e.store.settings().await.unwrap();
     let result = e.providers.search(&s, "tmdb:123", "movie").await.unwrap();
-    assert_eq!(result.len(), 1);
+    assert_eq!(result.len(), 2, "non-115 results are kept");
     assert_eq!(result[0].tmdb_id, "123");
+    assert!(result[0].selectable && !result[1].selectable);
     let status = e.providers.status(&s).await.unwrap();
     assert!(status["authorized"].as_bool().unwrap());
     assert!(status["user"].get("access_token").is_none());

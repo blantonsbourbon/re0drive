@@ -27,7 +27,6 @@ pub fn router(engine: App) -> Router {
     let protected = Router::new()
         .route("/api/dashboard", get(dashboard))
         .route("/api/settings", get(settings).put(save_settings))
-        .route("/api/resources/search", post(search))
         .route("/api/accounts/re0/status", get(re0_status))
         .route("/api/accounts/re0/authorize", post(authorize))
         .route("/api/accounts/checkin", post(checkin))
@@ -45,12 +44,22 @@ pub fn router(engine: App) -> Router {
             post(update_subscription).delete(delete_subscription),
         )
         .route("/api/subscriptions/{id}/run", post(run_subscription))
-        .route("/api/jobs", get(jobs).post(enqueue))
         .route("/api/jobs/{id}/retry", post(retry_job))
+        .route(
+            "/api/machine-token",
+            get(token_info).post(token_rotate).delete(token_revoke),
+        )
         .route("/api/auth/logout", post(logout))
         .route_layer(middleware::from_fn_with_state(engine.clone(), require_auth));
+    // Routes Hermes may call with `Authorization: Bearer <machine token>` (or a browser session).
+    let machine = Router::new()
+        .route("/api/resources/search", post(search))
+        .route("/api/jobs", get(jobs).post(enqueue))
+        .route("/api/jobs/{id}", get(job))
+        .route_layer(middleware::from_fn_with_state(engine.clone(), require_auth_or_token));
     Router::new()
         .merge(protected)
+        .merge(machine)
         .route(
             "/",
             get(|| async { Html(include_str!("../web/index.html")) }),
@@ -86,8 +95,22 @@ pub fn router(engine: App) -> Router {
         .layer(TraceLayer::new_for_http())
         .with_state(engine)
 }
+const MACHINE_PATHS: &[&str] = &["/api/resources/search", "/api/jobs"];
+fn bearer(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get("authorization")?
+        .to_str()
+        .ok()?
+        .strip_prefix("Bearer ")
+        .map(str::trim)
+}
 async fn headers_and_csrf(request: Request, next: Next) -> Response {
-    if request.uri().path().starts_with("/api/")
+    // Bearer requests carry no ambient browser credential, so CSRF is not applicable to them —
+    // but only on the machine routes, which then authenticate by token only.
+    let bearer_exempt = bearer(request.headers()).is_some()
+        && MACHINE_PATHS.contains(&request.uri().path());
+    if !bearer_exempt
+        && request.uri().path().starts_with("/api/")
         && !matches!(request.method().as_str(), "GET" | "HEAD" | "OPTIONS")
         && request
             .headers()
@@ -139,6 +162,70 @@ async fn require_auth(State(app): State<App>, request: Request, next: Next) -> R
         return Err(AppError::unauthorized());
     }
     Ok(next.run(request).await)
+}
+async fn require_auth_or_token(
+    State(app): State<App>,
+    request: Request,
+    next: Next,
+) -> Result<Response> {
+    if request.headers().contains_key("authorization") {
+        // An Authorization header means token auth only; no fallback to cookies.
+        let token = bearer(request.headers()).ok_or_else(AppError::unauthorized)?;
+        if !valid_machine_token(token) || !app.store.check_api_token(token_hash(token)).await? {
+            return Err(AppError::unauthorized());
+        }
+        return Ok(next.run(request).await);
+    }
+    require_auth(State(app), request, next).await
+}
+fn valid_machine_token(t: &str) -> bool {
+    t.len() == 68
+        && t.starts_with("r0d_")
+        && t[4..].bytes().all(|b| b.is_ascii_hexdigit())
+}
+async fn token_info(State(app): State<App>) -> Result<Json<Value>> {
+    Ok(Json(json!({"token":app.store.api_token_info().await?})))
+}
+/// Create or rotate the machine token. The plaintext is returned exactly once.
+async fn token_rotate(State(app): State<App>) -> Result<Json<Value>> {
+    let mut bytes = [0u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    let token = format!("r0d_{}", hex::encode(bytes));
+    let prefix = token[..10].to_string();
+    app.store.set_api_token(token_hash(&token), prefix).await?;
+    app.store.activity("security", "已生成新的机器令牌（旧令牌失效）").await?;
+    Ok(Json(json!({
+        "token": token,
+        "info": app.store.api_token_info().await?,
+        "notice": "令牌只显示这一次，请立即保存"
+    })))
+}
+async fn token_revoke(State(app): State<App>) -> Result<Json<Value>> {
+    app.store.delete_api_token().await?;
+    app.store.activity("security", "已撤销机器令牌").await?;
+    Ok(Json(json!({"ok":true})))
+}
+/// Job as exposed over the API: without the internal account fingerprint.
+fn public_job(job: &crate::models::Job) -> Value {
+    let mut v = json!(job);
+    if let Some(o) = v.as_object_mut() {
+        o.remove("account_key");
+    }
+    v
+}
+fn public_jobs(jobs: &[crate::models::Job]) -> Vec<Value> {
+    jobs.iter().map(public_job).collect()
+}
+async fn job(State(app): State<App>, Path(id): Path<String>) -> Result<Json<Value>> {
+    let job = app
+        .store
+        .job(id)
+        .await?
+        .ok_or_else(|| AppError {
+            status: StatusCode::NOT_FOUND,
+            message: "任务不存在".into(),
+        })?;
+    Ok(Json(json!({"job":public_job(&job)})))
 }
 async fn auth_status(State(app): State<App>, headers: HeaderMap) -> Result<Json<Value>> {
     let configured = app.store.admin().await?.is_some();
@@ -366,21 +453,39 @@ async fn dashboard(State(app): State<App>) -> Result<Json<Value>> {
     let mut stats = app.store.job_stats().await?;
     stats["subscriptions"] = json!(rules.iter().filter(|r| r.enabled).count());
     Ok(Json(
-        json!({"settings":s.public(),"subscriptions":rules,"jobs":jobs,"activity":logs,"stats":stats}),
+        json!({"settings":s.public(),"subscriptions":rules,"jobs":public_jobs(&jobs),"activity":logs,"stats":stats}),
     ))
 }
 #[derive(Deserialize)]
 struct Search {
+    #[serde(default)]
     query: String,
     media_type: String,
+    /// Query only this TMDB id (no title search, no merging of other ids).
+    #[serde(default, deserialize_with = "id_string")]
+    tmdb_id: Option<String>,
+}
+fn id_string<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Option<String>, D::Error> {
+    Ok(match Option::<Value>::deserialize(d)? {
+        Some(Value::String(s)) if !s.trim().is_empty() => Some(s.trim().to_string()),
+        Some(Value::Number(n)) => Some(n.to_string()),
+        _ => None,
+    })
 }
 async fn search(State(app): State<App>, Json(v): Json<Search>) -> Result<Json<Value>> {
-    if v.query.trim().is_empty() || v.query.len() > 300 || !valid_media_type(&v.media_type) {
+    if (v.query.trim().is_empty() && v.tmdb_id.is_none())
+        || v.query.len() > 300
+        || !valid_media_type(&v.media_type)
+    {
         return Err(AppError::bad("请填写片名或 TMDB ID，并选择电影/剧集"));
     }
     let s = app.store.settings().await?;
-    let resources = app.providers.search(&s, &v.query, &v.media_type).await?;
-    Ok(Json(json!({"mode":s.mode,"resources":resources})))
+    // Interactive search is never filtered by a points cap; the caller chooses the version.
+    let resources = app
+        .providers
+        .search_with(&s, &v.query, v.tmdb_id.as_deref(), &v.media_type)
+        .await?;
+    Ok(Json(json!({"mode":s.mode,"total":resources.len(),"resources":resources})))
 }
 async fn re0_status(State(app): State<App>) -> Result<Json<Value>> {
     Ok(Json(
@@ -428,6 +533,7 @@ async fn save_subscription(
     v.next_run = 0;
     v.last_run = None;
     v.last_result = "等待首次检查".into();
+    v.candidates = vec![];
     app.store.save_subscription(&v).await?;
     Ok(Json(v))
 }
@@ -447,6 +553,7 @@ async fn update_subscription(
     v.id = id;
     v.last_run = old.last_run;
     v.last_result = old.last_result;
+    v.candidates = if v.query == old.query && v.media_type == old.media_type { old.candidates } else { vec![] };
     v.next_run = if v.query != old.query || v.enabled && !old.enabled {
         0
     } else {
@@ -478,22 +585,28 @@ async fn run_subscription(State(app): State<App>, Path(id): Path<String>) -> Res
     Ok(Json(json!({"ok":true,"message":"已安排检查"})))
 }
 async fn jobs(State(app): State<App>) -> Result<Json<Value>> {
-    Ok(Json(json!({"jobs":app.store.jobs().await?})))
+    Ok(Json(json!({"jobs":public_jobs(&app.store.jobs().await?)})))
 }
 #[derive(Deserialize)]
 struct Transfer {
     resource: Resource,
-    target_cid: String,
-    max_points: i64,
+    /// Optional; empty/missing = 115 root folder ("0").
+    #[serde(default, deserialize_with = "id_string")]
+    target_cid: Option<String>,
+    /// Optional; missing = the selected version's listed price.
+    #[serde(default)]
+    max_points: Option<i64>,
 }
 async fn enqueue(State(app): State<App>, Json(v): Json<Transfer>) -> Result<Json<Value>> {
-    if !valid_cid(&v.target_cid) || !(0..=1000).contains(&v.max_points) {
+    if v.target_cid.as_deref().is_some_and(|c| !valid_cid(c))
+        || v.max_points.is_some_and(|p| !(0..=1000).contains(&p))
+    {
         return Err(AppError::bad("目标目录或积分上限无效"));
     }
     let job = app
-        .enqueue(v.resource, v.target_cid, v.max_points, None)
+        .enqueue_opt(v.resource, v.target_cid, v.max_points, None)
         .await?;
-    Ok(Json(json!({"job":job,"duplicate":job.is_none()})))
+    Ok(Json(json!({"job":job.as_ref().map(public_job),"duplicate":job.is_none()})))
 }
 #[derive(Deserialize)]
 struct Retry {

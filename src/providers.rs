@@ -1,6 +1,6 @@
 use crate::{
     error::{AppError, Result},
-    models::{Resource, Settings},
+    models::{ReceivedItem, Resource, Settings},
 };
 use hmac::{Hmac, Mac};
 use reqwest::{Client, Method, Response};
@@ -9,9 +9,19 @@ use sha2::{Digest, Sha256};
 use std::{collections::BTreeSet, sync::Arc, time::Duration};
 use url::Url;
 
+/// One top-level entry of a 115 share (from `share/snap`).
+#[derive(Clone, Debug)]
+pub struct ShareEntry {
+    pub id: String,
+    pub name: String,
+    pub is_dir: bool,
+    pub size: i64,
+}
+
 #[derive(Clone)]
 pub struct Providers {
     pub http: Client,
+    pub resolve_delay: Duration,
     share_base: String,
     tmdb_base: String,
     pub(crate) qr_base: String,
@@ -52,6 +62,7 @@ impl Providers {
             share_base,
             tmdb_base,
             qr_base: "https://qrcodeapi.115.com".into(),
+            resolve_delay: Duration::from_millis(1500),
             gateway_slots: Arc::new(tokio::sync::Semaphore::new(4)),
         }
     }
@@ -198,13 +209,30 @@ impl Providers {
         query: &str,
         media_type: &str,
     ) -> Result<Vec<Resource>> {
+        self.search_with(s, query, None, media_type).await
+    }
+    /// `tmdb_id` (or a query that is a bare number / `tmdb:<n>`) queries ONLY that TMDB id.
+    /// A title query merges the first 4 TMDB matches.
+    pub async fn search_with(
+        &self,
+        s: &Settings,
+        query: &str,
+        tmdb_id: Option<&str>,
+        media_type: &str,
+    ) -> Result<Vec<Resource>> {
+        let is_id = |v: &str| !v.is_empty() && v.len() <= 12 && v.bytes().all(|b| b.is_ascii_digit());
+        if let Some(t) = tmdb_id {
+            if !is_id(t.trim()) {
+                return Err(AppError::bad("tmdb_id 必须是数字"));
+            }
+        }
         if s.mode == "demo" {
-            return Ok(demo_resources(query, media_type));
+            return Ok(demo_resources(tmdb_id.unwrap_or(query), media_type));
         }
         let mut ids = vec![];
         let query = query.trim();
-        let id = query.strip_prefix("tmdb:").unwrap_or(query);
-        if !id.is_empty() && id.len() <= 12 && id.bytes().all(|b| b.is_ascii_digit()) {
+        let id = tmdb_id.map(str::trim).unwrap_or_else(|| query.strip_prefix("tmdb:").unwrap_or(query));
+        if is_id(id) {
             ids.push(id.to_string());
         } else {
             if s.tmdb_api_key.is_empty() {
@@ -263,6 +291,7 @@ impl Providers {
         }
         result.sort_by_key(|r| {
             (
+                !r.selectable,
                 !r.is_unlocked,
                 r.unlock_points.unwrap_or(i64::MAX),
                 r.title.clone(),
@@ -319,15 +348,18 @@ impl Providers {
         s: &Settings,
         share_url: &str,
         target_cid: &str,
-    ) -> Result<usize> {
+    ) -> Result<Vec<ShareEntry>> {
         let (share_code, receive_code) = parse_115_share(share_url)?;
         if s.mode == "demo" {
-            return Ok(3);
+            return Ok((1..=3)
+                .map(|i| ShareEntry { id: format!("{i}"), name: format!("demo-{i}.mkv"), is_dir: false, size: 0 })
+                .collect());
         }
         if s.cookie_115.is_empty() {
             return Err(AppError::bad("请先配置 115 Cookie"));
         }
         let mut file_ids = BTreeSet::new();
+        let mut entries: Vec<ShareEntry> = vec![];
         let mut offset = 0usize;
         for _ in 0..120 {
             let url = format!("{}/share/snap", self.share_base.trim_end_matches('/'));
@@ -354,16 +386,26 @@ impl Providers {
                 .and_then(Value::as_array)
                 .ok_or_else(|| AppError::upstream("115 分享响应缺少文件列表"))?;
             for item in list {
-                let id = ["fid", "cid", "file_id"]
-                    .iter()
-                    .map(|key| text(item, &[*key]))
-                    .find(|id| id != "0" && !id.is_empty())
-                    .unwrap_or_default();
-                if !id.is_empty() {
+                // Files carry a non-zero `fid` (a single-file share has cid 0); folders are
+                // identified by their own `cid` and have no fid.
+                let fid = text(item, &["fid", "file_id"]);
+                let (id, is_dir) = if !fid.is_empty() && fid != "0" {
+                    (fid, false)
+                } else {
+                    (text(item, &["cid"]), true)
+                };
+                if !id.is_empty() && id != "0" {
                     if !crate::models::valid_cid(&id) {
                         return Err(AppError::upstream("115 分享返回了无效文件 ID"));
                     }
-                    file_ids.insert(id);
+                    if file_ids.insert(id.clone()) {
+                        entries.push(ShareEntry {
+                            id,
+                            name: text(item, &["n", "file_name", "name"]),
+                            is_dir,
+                            size: item.get("s").or_else(|| item.get("size")).and_then(|v| v.as_i64().or_else(|| v.as_str()?.parse().ok())).unwrap_or(0),
+                        });
+                    }
                 }
             }
             offset += list.len();
@@ -409,7 +451,81 @@ impl Providers {
                 ));
             }
         }
-        Ok(file_ids.len())
+        Ok(entries)
+    }
+    /// List the newest entries of a 115 folder with the user's cookie (read-only).
+    pub async fn list_115_dir(&self, s: &Settings, cid: &str) -> Result<Vec<Value>> {
+        let response = self
+            .http
+            .get(format!("{}/files", self.share_base.trim_end_matches('/')))
+            .header("Cookie", &s.cookie_115)
+            .header("Referer", &self.share_base)
+            .query(&[
+                ("aid", "1"),
+                ("cid", cid),
+                ("offset", "0"),
+                ("limit", "1150"),
+                ("show_dir", "1"),
+                ("o", "user_ptime"),
+                ("asc", "0"),
+                ("format", "json"),
+            ])
+            .send()
+            .await
+            .map_err(|_| AppError::upstream("列出 115 目标目录失败"))?;
+        let v = read_json(response, "115 目录").await?;
+        check_success(&v, "115 目录")?;
+        Ok(v.get("data").and_then(Value::as_array).cloned().unwrap_or_default())
+    }
+    /// After a successful receive, resolve each received entry to its local id in `target_cid`
+    /// by matching names in the target folder listing. Files use the listed `fid`; folders use their
+    /// own `cid` (never the listed parent cid). Retries briefly while 115 finishes the copy.
+    pub async fn resolve_received(
+        &self,
+        s: &Settings,
+        entries: &[ShareEntry],
+        target_cid: &str,
+    ) -> Result<Vec<ReceivedItem>> {
+        let mut out: Vec<ReceivedItem> = entries
+            .iter()
+            .map(|e| ReceivedItem {
+                name: e.name.clone(),
+                is_dir: e.is_dir,
+                share_id: e.id.clone(),
+                local_id: String::new(),
+                parent_cid: target_cid.into(),
+                size: e.size,
+            })
+            .collect();
+        if s.mode == "demo" {
+            for (i, r) in out.iter_mut().enumerate() {
+                r.local_id = format!("900000000000000{i}");
+            }
+            return Ok(out);
+        }
+        for attempt in 0..3 {
+            if attempt > 0 {
+                tokio::time::sleep(self.resolve_delay).await;
+            }
+            let listing = self.list_115_dir(s, target_cid).await?;
+            for r in out.iter_mut().filter(|r| r.local_id.is_empty() && !r.name.is_empty()) {
+                let found = listing.iter().find(|item| {
+                    let fid = text(item, &["fid"]);
+                    let is_dir = fid.is_empty() || fid == "0";
+                    is_dir == r.is_dir && text(item, &["n", "file_name", "name"]) == r.name
+                });
+                if let Some(item) = found {
+                    r.local_id = if r.is_dir { text(item, &["cid"]) } else { text(item, &["fid"]) };
+                    if r.size == 0 {
+                        r.size = item.get("s").and_then(|v| v.as_i64().or_else(|| v.as_str()?.parse().ok())).unwrap_or(0);
+                    }
+                }
+            }
+            if out.iter().all(|r| !r.local_id.is_empty() || r.name.is_empty()) {
+                break;
+            }
+        }
+        Ok(out)
     }
 }
 impl Default for Providers {
@@ -530,6 +646,29 @@ pub fn owned(v: &Value) -> bool {
             .and_then(Value::as_bool)
             .unwrap_or(false)
 }
+/// Known pan-type group keys used by relay responses that group results by drive.
+const PAN_KEYS: &[&str] = &["115", "quark", "baidu", "alipan", "aliyun", "xunlei", "189", "139", "ed2k", "magnet", "uc", "123"];
+fn raw(v: &Value, keys: &[&str]) -> Value {
+    keys.iter()
+        .filter_map(|k| v.get(*k))
+        .find(|x| !x.is_null() && x.as_str() != Some(""))
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+fn flat(v: &Value) -> String {
+    match v {
+        Value::Array(a) => a
+            .iter()
+            .map(|x| x.as_str().map(str::to_string).unwrap_or_else(|| x.to_string()))
+            .collect::<Vec<_>>()
+            .join(" / "),
+        Value::String(s) => s.clone(),
+        Value::Null => String::new(),
+        other => other.to_string(),
+    }
+}
+/// Normalize relay resource lists. Every resource with a valid slug is kept, including non-115
+/// drives (`selectable: false`); array fields are preserved verbatim.
 pub fn normalize_resources(v: &Value) -> Vec<Resource> {
     fn walk(v: &Value, hint: &str, out: &mut Vec<Resource>, depth: usize) {
         if depth > 12 || out.len() >= 500 {
@@ -545,9 +684,9 @@ pub fn normalize_resources(v: &Value) -> Vec<Resource> {
             return;
         };
         let mut slug = text(v, &["slug", "resource_slug", "share_slug"]);
-        let source = text(v, &["hdhive_url", "resource_url", "source_url"]);
-        if slug.is_empty() && !source.is_empty() {
-            if let Ok(u) = Url::parse(&source) {
+        let source_url = text(v, &["hdhive_url", "resource_url", "source_url"]);
+        if slug.is_empty() && !source_url.is_empty() {
+            if let Ok(u) = Url::parse(&source_url) {
                 slug = u
                     .path_segments()
                     .and_then(|s| s.filter(|v| !v.is_empty()).next_back())
@@ -556,48 +695,54 @@ pub fn normalize_resources(v: &Value) -> Vec<Resource> {
             }
         }
         if valid_slug(&slug) {
-            let mut provider = text(
+            let mut pan_type = text(
                 v,
-                &[
-                    "website",
-                    "website_code",
-                    "resource_website",
-                    "provider",
-                    "pan_type",
-                    "disk_type",
-                ],
+                &["pan_type", "website", "website_code", "resource_website", "provider", "disk_type"],
             );
-            if provider.is_empty() {
-                provider = hint.into();
+            if pan_type.is_empty() {
+                pan_type = hint.into();
             }
-            if provider.contains("115") {
-                provider = "115".into();
-            }
-            if provider != "115" {
-                return;
+            let provider = if pan_type.contains("115") {
+                "115".to_string()
+            } else if pan_type.is_empty() {
+                "unknown".to_string()
+            } else {
+                pan_type.to_lowercase()
+            };
+            let video_resolution = raw(v, &["video_resolution", "resolution"]);
+            let source = raw(v, &["source", "video_source"]);
+            let share_size = raw(v, &["share_size", "size", "file_size"]);
+            let mut quality = text(v, &["quality", "version"]);
+            if quality.is_empty() {
+                quality = flat(&video_resolution);
             }
             out.push(Resource {
                 slug: slug.clone(),
                 title: text(v, &["title", "name", "resource_title", "file_name"]),
+                selectable: provider == "115",
                 provider,
-                source_url: source,
+                pan_type,
+                source_url,
                 unlock_points: points(v),
                 is_unlocked: owned(v),
-                quality: text(v, &["quality", "resolution", "version"]),
-                size: text(v, &["size", "file_size"]),
+                quality,
+                size: flat(&share_size),
                 tmdb_id: String::new(),
                 media_type: String::new(),
+                share_size,
+                video_resolution,
+                source,
+                subtitle_language: raw(v, &["subtitle_language", "subtitle_languages"]),
+                subtitle_type: raw(v, &["subtitle_type", "subtitle_types"]),
+                remark: text(v, &["remark", "note", "description"]),
             });
             return;
         }
         for (k, item) in map {
             if item.is_object() || item.is_array() {
-                walk(
-                    item,
-                    if k.contains("115") { "115" } else { hint },
-                    out,
-                    depth + 1,
-                );
+                let key = k.to_lowercase();
+                let next = PAN_KEYS.iter().find(|p| key == **p || (**p == "115" && key.contains("115")));
+                walk(item, next.copied().unwrap_or(hint), out, depth + 1);
             }
         }
     }
@@ -650,22 +795,31 @@ pub fn demo_resources(query: &str, media_type: &str) -> Vec<Resource> {
         "沙丘：第二部"
     };
     [
-        ("demo_2160", "2160p REMUX · Dolby Vision", 0, "82.4 GB"),
-        ("demo_4k", "2160p WEB-DL · HDR10", 2, "24.6 GB"),
-        ("demo_1080", "1080p BluRay · x265", 4, "9.8 GB"),
+        ("demo_2160", "115", "2160p REMUX · Dolby Vision", "2160P", "REMUX", Some(0), "82.4 GB", "原盘 REMUX，含国语"),
+        ("demo_4k", "115", "2160p WEB-DL · HDR10", "2160P", "WEB-DL", Some(2), "24.6 GB", ""),
+        ("demo_1080", "115", "1080p BluRay · x265", "1080P", "BluRay", Some(4), "9.8 GB", ""),
+        ("demo_quark", "quark", "1080p WEB-DL", "1080P", "WEB-DL", Some(1), "6.1 GB", "夸克网盘，不可转存到 115"),
     ]
     .into_iter()
-    .map(|(slug, quality, p, size)| Resource {
+    .map(|(slug, pan, quality, res, src, p, size, remark)| Resource {
         slug: slug.into(),
         title: format!("{title} · {quality}"),
-        provider: "115".into(),
+        provider: pan.into(),
+        pan_type: pan.into(),
+        selectable: pan == "115",
         source_url: String::new(),
-        unlock_points: Some(p),
-        is_unlocked: p == 0,
+        unlock_points: p,
+        is_unlocked: p == Some(0),
         quality: quality.into(),
         size: size.into(),
         tmdb_id: "693134".into(),
         media_type: media_type.into(),
+        share_size: json!(size),
+        video_resolution: json!([res]),
+        source: json!([src]),
+        subtitle_language: json!(["简体中文", "English"]),
+        subtitle_type: json!(["内嵌"]),
+        remark: remark.into(),
     })
     .collect()
 }

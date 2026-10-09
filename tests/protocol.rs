@@ -123,12 +123,14 @@ fn parses_115_share_links() {
 #[test]
 fn normalizes_resources_and_points() {
     let v = json!({"success":true,"data":{"115":[{"slug":"a1","title":"Movie 2160p","unlock_points":"3","quality":"2160p"}],
-        "quark":[{"slug":"q1","title":"skip me"}],"other":[{"slug":"b2","pan_type":"115","title":"Movie 1080p","is_unlocked":true}]}});
+        "quark":[{"slug":"q1","title":"kept but not selectable"}],"other":[{"slug":"b2","pan_type":"115","title":"Movie 1080p","is_unlocked":true}]}});
     let mut r = normalize_resources(&v);
     r.sort_by(|a, b| a.slug.cmp(&b.slug));
-    assert_eq!(r.len(), 2);
+    assert_eq!(r.len(), 3);
     assert_eq!((r[0].slug.as_str(), r[0].unlock_points), ("a1", Some(3)));
-    assert!(r[1].is_unlocked);
+    assert!(r[0].selectable);
+    assert!(r[1].is_unlocked && r[1].selectable);
+    assert_eq!((r[2].slug.as_str(), r[2].provider.as_str(), r[2].pan_type.as_str(), r[2].selectable), ("q1", "quark", "quark", false));
     assert_eq!(
         points(&json!({"actual_unlock_points":5,"unlock_points":2})),
         Some(5)
@@ -148,6 +150,7 @@ fn res(title: &str, points: Option<i64>, unlocked: bool) -> Resource {
         size: String::new(),
         tmdb_id: String::new(),
         media_type: "movie".into(),
+        ..Default::default()
     }
 }
 

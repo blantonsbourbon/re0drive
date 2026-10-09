@@ -51,6 +51,7 @@ impl Store {
             CREATE TABLE IF NOT EXISTS config(id INTEGER PRIMARY KEY CHECK(id=1), encrypted TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS admin(id INTEGER PRIMARY KEY CHECK(id=1), username TEXT NOT NULL, password_hash TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY, expires INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS api_token(id INTEGER PRIMARY KEY CHECK(id=1), token_hash TEXT NOT NULL, prefix TEXT NOT NULL, created_at INTEGER NOT NULL, last_used INTEGER);
             CREATE TABLE IF NOT EXISTS subscriptions(id TEXT PRIMARY KEY, doc TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY, dedup TEXT NOT NULL UNIQUE, status TEXT NOT NULL, doc TEXT NOT NULL, created_at INTEGER NOT NULL);
             CREATE INDEX IF NOT EXISTS jobs_status ON jobs(status,created_at);
@@ -208,6 +209,58 @@ impl Store {
             })
             .await?)
     }
+    /// Replace the single machine (Bearer) token. Only the sha256 hash and a short display prefix are stored.
+    pub async fn set_api_token(&self, hash: String, prefix: String) -> Result<()> {
+        self.db
+            .call(move |c| {
+                c.execute(
+                    "INSERT OR REPLACE INTO api_token(id,token_hash,prefix,created_at,last_used) VALUES(1,?1,?2,?3,NULL)",
+                    params![hash, prefix, now()],
+                )?;
+                Ok(())
+            })
+            .await?;
+        Ok(())
+    }
+    pub async fn delete_api_token(&self) -> Result<()> {
+        self.db
+            .call(|c| {
+                c.execute("DELETE FROM api_token", [])?;
+                Ok(())
+            })
+            .await?;
+        Ok(())
+    }
+    /// Public metadata of the machine token (never the token or its hash).
+    pub async fn api_token_info(&self) -> Result<Option<serde_json::Value>> {
+        Ok(self
+            .db
+            .call(|c| {
+                Ok(c.query_row("SELECT prefix,created_at,last_used FROM api_token WHERE id=1", [], |r| {
+                    Ok(serde_json::json!({"prefix":r.get::<_, String>(0)?,"created_at":r.get::<_, i64>(1)?,"last_used":r.get::<_, Option<i64>>(2)?}))
+                })
+                .optional()?)
+            })
+            .await?)
+    }
+    /// Constant-time-ish check of a token hash; updates `last_used` on success.
+    pub async fn check_api_token(&self, hash: String) -> Result<bool> {
+        Ok(self
+            .db
+            .call(move |c| {
+                let stored: Option<String> = c
+                    .query_row("SELECT token_hash FROM api_token WHERE id=1", [], |r| r.get(0))
+                    .optional()?;
+                let ok = stored.is_some_and(|s| {
+                    s.len() == hash.len() && s.bytes().zip(hash.bytes()).fold(0u8, |a, (x, y)| a | (x ^ y)) == 0
+                });
+                if ok {
+                    c.execute("UPDATE api_token SET last_used=?1 WHERE id=1", [now()])?;
+                }
+                Ok(ok)
+            })
+            .await?)
+    }
     pub async fn delete_session(&self, hash: String) -> Result<()> {
         self.db
             .call(move |c| {
@@ -242,7 +295,12 @@ impl Store {
             .await?;
         Ok(())
     }
-    pub async fn finish_subscription(&self, id: String, message: String) -> Result<()> {
+    pub async fn finish_subscription(
+        &self,
+        id: String,
+        message: String,
+        candidates: Option<Vec<crate::models::Resource>>,
+    ) -> Result<()> {
         self.db
             .call(move |c| {
                 let current: Option<Subscription> = c
@@ -253,6 +311,9 @@ impl Store {
                 if let Some(mut rule) = current {
                     rule.last_run = Some(now());
                     rule.last_result = message;
+                    if let Some(c) = candidates {
+                        rule.candidates = c;
+                    }
                     rule.next_run = now() + i64::from(rule.interval_minutes) * 60;
                     let doc = serde_json::to_string(&rule)
                         .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;

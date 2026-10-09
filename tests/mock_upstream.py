@@ -54,10 +54,20 @@ class H(BaseHTTPRequestHandler):
         if u.path.startswith("/share/"):
             CALLS.append({"m": method, "p": u.path, "q": u.query, "cookie": bool(self.headers.get("Cookie")), "body": body.decode()})
             if u.path == "/share/snap":
-                return self.send({"state": True, "data": {"count": 2, "list": [{"fid": "111"}, {"cid": "222"}]}})
+                return self.send({"state": True, "data": {"count": 2, "list": [
+                    {"fid": "111", "cid": "0", "n": "Mock.Movie.2160p.mkv", "s": "64424509440"},
+                    {"cid": "222", "n": "Extras"}]}})
             if u.path == "/share/receive":
                 if not self.headers.get("Cookie"): return self.send({"state": False, "error": "not logged in"})
                 return self.send({"state": True})
+        if u.path == "/files":  # 115 folder listing: received items get NEW local ids
+            q = urllib.parse.parse_qs(u.query); cid = q.get("cid", [""])[0]
+            CALLS.append({"m": method, "p": u.path, "q": u.query, "cookie": bool(self.headers.get("Cookie"))})
+            if not self.headers.get("Cookie"): return self.send({"state": False, "error": "not logged in"})
+            return self.send({"state": True, "data": [
+                {"fid": "9111", "cid": cid, "n": "Mock.Movie.2160p.mkv", "s": 64424509440},
+                {"cid": "9222", "pid": cid, "n": "Extras"},
+                {"fid": "9333", "cid": cid, "n": "unrelated.nfo", "s": 1}]})
         h = self.headers
         exp = hmac.new(KEY, canonical(method, u.path, u.query, h.get("X-Install-Id", ""), h.get("X-Timestamp", ""), h.get("X-Nonce", ""), body).encode(), hashlib.sha256).hexdigest()
         ok = hmac.compare_digest(exp, h.get("X-Signature", ""))
@@ -67,12 +77,17 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/api/token/status": return ok_({"has_access_token": h.get("X-Install-Id") in AUTHED})
         if u.path == "/api/me": return ok_({"nickname": "mock-user", "points": 42, "level": "Lv3"})
         if u.path == "/api/checkin": return ok_({"message": "签到成功（mock）", "points": 1})
+        if u.path == "/api/resources/movie/999":  # relay has nothing: explicit empty list, no fallback
+            return self.send({"success": True, "code": "200", "data": [], "total": 0})
         if u.path.startswith("/api/resources/") and method == "GET":
             return ok_({"115": [
-                {"slug": "m_cheap", "title": "Mock Movie 2160p REMUX", "unlock_points": 2, "quality": "2160p", "size": "60 GB"},
+                {"slug": "m_cheap", "title": "Mock Movie 2160p REMUX", "unlock_points": 2, "quality": "2160p", "pan_type": "115",
+                 "share_size": "60 GB", "video_resolution": ["2160P"], "source": ["REMUX", "Blu-ray"],
+                 "subtitle_language": ["简中", "英语"], "subtitle_type": ["内封"], "remark": "杜比视界"},
                 {"slug": "m_pricey", "title": "Mock Movie 2160p WEB-DL", "unlock_points": 50, "quality": "2160p"},
                 {"slug": "m_owned", "title": "Mock Movie 1080p", "is_unlocked": True, "quality": "1080p"}],
-                "quark": [{"slug": "q_x", "title": "not 115"}]})
+                "quark": [{"slug": "q_x", "title": "not 115", "pan_type": "quark", "video_resolution": ["1080P"], "unlock_points": 0}],
+                "ed2k": [{"slug": "e_x", "title": "ed2k link", "pan_type": "ed2k", "source": ["HDTV"], "unlock_points": 1}]})
         if u.path.startswith("/api/shares/"):
             slug = urllib.parse.unquote(u.path.rsplit("/", 1)[1])
             return ok_({"unlock_points": POINTS.get(slug), "is_unlocked": slug == "m_owned"})

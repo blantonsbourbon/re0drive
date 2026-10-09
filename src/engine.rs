@@ -27,6 +27,27 @@ impl Engine {
             qr: Default::default(),
         }
     }
+    /// Queue a transfer of a caller-selected version.
+    /// * `target_cid`: empty = 115 root (`0`).
+    /// * `max_points`: `None` = the price the caller saw for this version (re-checked right before
+    ///   unlocking; a higher live price skips the job), or the settings default when the price was unknown.
+    pub async fn enqueue_opt(
+        &self,
+        resource: Resource,
+        target_cid: Option<String>,
+        max_points: Option<i64>,
+        subscription_id: Option<String>,
+    ) -> Result<Option<Job>> {
+        let target_cid = target_cid.map(|c| c.trim().to_string()).filter(|c| !c.is_empty()).unwrap_or_else(|| "0".into());
+        let max_points = match max_points {
+            Some(v) => v,
+            None => match resource.unlock_points {
+                Some(p) if p >= 0 => p,
+                _ => self.store.settings().await?.default_max_points,
+            },
+        };
+        self.enqueue(resource, target_cid, max_points, subscription_id).await
+    }
     pub async fn enqueue(
         &self,
         resource: Resource,
@@ -34,6 +55,9 @@ impl Engine {
         max_points: i64,
         subscription_id: Option<String>,
     ) -> Result<Option<Job>> {
+        if !resource.selectable {
+            return Err(AppError::bad(format!("{} 资源不能转存到 115", if resource.pan_type.is_empty() { resource.provider.as_str() } else { resource.pan_type.as_str() })));
+        }
         if resource.provider != "115"
             || !valid_slug(&resource.slug)
             || !valid_cid(&target_cid)
@@ -56,6 +80,7 @@ impl Engine {
             updated_at: now(),
             mode: s.mode,
             account_key: key,
+            received: vec![],
         };
         if self.store.enqueue(&job, dedup).await? {
             self.store
@@ -88,17 +113,11 @@ impl Engine {
             .await?;
             return Ok(());
         }
-        if let Some(ref id) = job.subscription_id {
-            if !self
-                .store
-                .subscriptions()
-                .await?
-                .iter()
-                .any(|r| &r.id == id && r.enabled && r.auto_transfer)
-            {
-                self.update(&mut job, "skipped", "订阅已停用或删除").await?;
-                return Ok(());
-            }
+        if job.subscription_id.is_some() {
+            // Subscriptions only collect candidates; legacy auto-created jobs never unlock.
+            self.update(&mut job, "skipped", "订阅不会自动解锁，请在候选版本中确认后转存")
+                .await?;
+            return Ok(());
         }
         if settings.mode != "demo" && settings.cookie_115.is_empty() {
             self.update(&mut job, "failed", "尚未配置 115 Cookie，没有发起解锁")
@@ -115,6 +134,13 @@ impl Engine {
             }
         };
         let data = detail.get("data").unwrap_or(&detail);
+        // Never spend points on a version that cannot land in 115.
+        let pan = crate::providers::text(data, &["pan_type", "website", "provider"]);
+        if !pan.is_empty() && !pan.contains("115") {
+            self.update(&mut job, "skipped", format!("资源网盘类型为 {pan}，不能转存到 115，未解锁"))
+                .await?;
+            return Ok(());
+        }
         if !owned(data) {
             match points(data) {
                 None => {
@@ -151,11 +177,27 @@ impl Engine {
             .receive_115(&settings, &link, &job.target_cid)
             .await
         {
-            Ok(count) => {
+            Ok(entries) => {
+                let count = entries.len();
+                // Receive succeeded; now resolve local ids in the target folder (read-only listing).
+                let note = match self.providers.resolve_received(&settings, &entries, &job.target_cid).await {
+                    Ok(items) => {
+                        let found = items.iter().filter(|r| !r.local_id.is_empty()).count();
+                        job.received = items;
+                        format!("本地已定位 {found}/{count} 项")
+                    }
+                    Err(e) => {
+                        job.received = entries
+                            .iter()
+                            .map(|e| crate::models::ReceivedItem { name: e.name.clone(), is_dir: e.is_dir, share_id: e.id.clone(), parent_cid: job.target_cid.clone(), size: e.size, ..Default::default() })
+                            .collect();
+                        format!("未能列出目标目录：{}", e.message)
+                    }
+                };
                 let message = if settings.mode == "demo" {
                     format!("演示完成：模拟接收 {count} 项，没有发起外部操作")
                 } else {
-                    format!("已接收 {count} 个文件或目录")
+                    format!("已接收 {count} 个文件或目录 · {note}")
                 };
                 self.update(&mut job, "success", &message).await?;
                 self.store
@@ -174,12 +216,13 @@ impl Engine {
         }
         Ok(())
     }
-    async fn scan(&self, rule: Subscription) -> anyhow::Result<()> {
+    pub async fn scan(&self, rule: Subscription) -> anyhow::Result<()> {
         let settings = self.store.settings().await?;
         let result = self
             .providers
             .search(&settings, &rule.query, &rule.media_type)
             .await;
+        let mut candidates = None;
         let message = match result {
             Err(e) => format!("检查失败：{}", e.message),
             Ok(items) => {
@@ -202,28 +245,14 @@ impl Engine {
                     .filter(|r| rule.matches(r))
                     .collect::<Vec<_>>();
                 let count = matches.len();
-                let mut queued = 0;
-                if rule.auto_transfer {
-                    for resource in matches.into_iter().take(10) {
-                        if self
-                            .enqueue(
-                                resource,
-                                rule.target_cid.clone(),
-                                rule.max_points,
-                                Some(rule.id.clone()),
-                            )
-                            .await?
-                            .is_some()
-                        {
-                            queued += 1;
-                        }
-                    }
-                }
-                format!("匹配 {count} 项 · 新增 {queued} 个任务")
+                // Subscriptions never unlock by themselves (not even 0-point or auto_transfer rules):
+                // they record candidate versions; the caller picks one and creates a job.
+                candidates = Some(matches.into_iter().take(20).collect());
+                format!("匹配 {count} 个候选版本 · 待选择")
             }
         };
         self.store
-            .finish_subscription(rule.id, message.clone())
+            .finish_subscription(rule.id, message.clone(), candidates)
             .await?;
         self.store
             .activity("scan", &format!("{} · {message}", rule.name))

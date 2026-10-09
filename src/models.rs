@@ -24,7 +24,7 @@ impl Default for Settings {
             tmdb_api_key: String::new(),
             cookie_115: String::new(),
             default_target_cid: "0".into(),
-            default_max_points: 4,
+            default_max_points: 20,
             checkin_enabled: false,
             last_checkin_day: String::new(),
         }
@@ -40,6 +40,7 @@ impl Settings {
 pub struct Resource {
     pub slug: String,
     pub title: String,
+    /// Normalized: "115" when transferable, otherwise the lower-cased raw pan type (e.g. "quark", "ed2k").
     pub provider: String,
     pub source_url: String,
     pub unlock_points: Option<i64>,
@@ -51,6 +52,65 @@ pub struct Resource {
     pub tmdb_id: String,
     #[serde(default)]
     pub media_type: String,
+    /// Raw relay `pan_type` (or equivalent) exactly as returned.
+    #[serde(default)]
+    pub pan_type: String,
+    /// Only 115 resources can be queued. Non-115 results are still listed with `selectable: false`.
+    #[serde(default = "yes")]
+    pub selectable: bool,
+    /// Raw relay values, kept verbatim (often arrays).
+    #[serde(default)]
+    pub share_size: serde_json::Value,
+    #[serde(default)]
+    pub video_resolution: serde_json::Value,
+    #[serde(default)]
+    pub source: serde_json::Value,
+    #[serde(default)]
+    pub subtitle_language: serde_json::Value,
+    #[serde(default)]
+    pub subtitle_type: serde_json::Value,
+    #[serde(default)]
+    pub remark: String,
+}
+fn yes() -> bool {
+    true
+}
+impl Resource {
+    /// Text used for keyword / quality matching: title + all descriptive fields.
+    pub fn match_text(&self) -> String {
+        let flat = |v: &serde_json::Value| match v {
+            serde_json::Value::Array(a) => a.iter().map(|x| x.as_str().map(str::to_string).unwrap_or_else(|| x.to_string())).collect::<Vec<_>>().join(" "),
+            serde_json::Value::Null => String::new(),
+            serde_json::Value::String(s) => s.clone(),
+            other => other.to_string(),
+        };
+        format!(
+            "{} {} {} {} {} {} {}",
+            self.title,
+            self.quality,
+            flat(&self.video_resolution),
+            flat(&self.source),
+            flat(&self.subtitle_language),
+            flat(&self.subtitle_type),
+            self.remark
+        )
+        .to_lowercase()
+    }
+}
+
+/// One item received into the 115 target folder, resolved to the *local* id after receive.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ReceivedItem {
+    pub name: String,
+    pub is_dir: bool,
+    /// Share-side id that was received (snap fid for files, snap cid for folders).
+    pub share_id: String,
+    /// Local id in the user's 115 after receive: file fid, or the folder's own cid. Empty if not found.
+    pub local_id: String,
+    /// Folder that contains the received item (the job's target cid).
+    pub parent_cid: String,
+    pub size: i64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -71,6 +131,9 @@ pub struct Subscription {
     pub last_run: Option<i64>,
     pub last_result: String,
     pub next_run: i64,
+    /// Matching versions found by the last scan. Subscriptions never unlock by themselves:
+    /// the caller picks a version and creates a job.
+    pub candidates: Vec<Resource>,
 }
 impl Default for Subscription {
     fn default() -> Self {
@@ -80,28 +143,29 @@ impl Default for Subscription {
             query: String::new(),
             media_type: "movie".into(),
             target_cid: "0".into(),
-            max_points: 4,
+            max_points: 20,
             quality: String::new(),
             include_keywords: String::new(),
             exclude_keywords: String::new(),
             interval_minutes: 30,
-            auto_transfer: true,
+            auto_transfer: false,
             enabled: true,
             last_run: None,
             last_result: String::new(),
             next_run: 0,
+            candidates: vec![],
         }
     }
 }
 impl Subscription {
     pub fn matches(&self, r: &Resource) -> bool {
-        if r.provider != "115" {
+        if r.provider != "115" || !r.selectable {
             return false;
         }
         if !r.is_unlocked && r.unlock_points.is_none_or(|n| n < 0 || n > self.max_points) {
             return false;
         }
-        let text = format!("{} {}", r.title, r.quality).to_lowercase();
+        let text = r.match_text();
         if !self.quality.is_empty() && !text.contains(&self.quality.to_lowercase()) {
             return false;
         }
@@ -134,6 +198,9 @@ pub struct Job {
     pub updated_at: i64,
     pub mode: String,
     pub account_key: String,
+    /// Items received into 115 with their local ids (filled after a successful receive).
+    #[serde(default)]
+    pub received: Vec<ReceivedItem>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -149,4 +216,15 @@ pub fn valid_cid(cid: &str) -> bool {
 }
 pub fn valid_media_type(value: &str) -> bool {
     matches!(value, "movie" | "tv")
+}
+
+impl Default for Resource {
+    fn default() -> Self {
+        serde_json::from_value(serde_json::json!({
+            "slug": "", "title": "", "provider": "115", "source_url": "",
+            "unlock_points": null, "is_unlocked": false, "quality": "", "size": "",
+            "tmdb_id": "", "media_type": ""
+        }))
+        .expect("default resource")
+    }
 }
