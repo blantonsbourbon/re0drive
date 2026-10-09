@@ -13,13 +13,30 @@ use url::Url;
 pub struct Providers {
     pub http: Client,
     share_base: String,
+    tmdb_base: String,
     gateway_slots: Arc<tokio::sync::Semaphore>,
 }
 impl Providers {
+    /// Production endpoints, overridable for offline testing / self-hosted proxies:
+    /// `RE0DRIVE_115_BASE_URL` (default https://webapi.115.com) and
+    /// `RE0DRIVE_TMDB_BASE_URL` (default https://api.themoviedb.org).
     pub fn new() -> Self {
-        Self::with_share_base("https://webapi.115.com".into())
+        let env = |k: &str, d: &str| {
+            std::env::var(k)
+                .ok()
+                .map(|v| v.trim().trim_end_matches('/').to_string())
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(|| d.into())
+        };
+        Self::with_bases(
+            env("RE0DRIVE_115_BASE_URL", "https://webapi.115.com"),
+            env("RE0DRIVE_TMDB_BASE_URL", "https://api.themoviedb.org"),
+        )
     }
     pub fn with_share_base(share_base: String) -> Self {
+        Self::with_bases(share_base, "https://api.themoviedb.org".into())
+    }
+    pub fn with_bases(share_base: String, tmdb_base: String) -> Self {
         Self {
             http: Client::builder()
                 .connect_timeout(Duration::from_secs(8))
@@ -30,6 +47,7 @@ impl Providers {
                 .build()
                 .expect("HTTP client"),
             share_base,
+            tmdb_base,
             gateway_slots: Arc::new(tokio::sync::Semaphore::new(4)),
         }
     }
@@ -188,7 +206,10 @@ impl Providers {
             }
             let response = self
                 .http
-                .get(format!("https://api.themoviedb.org/3/search/{media_type}"))
+                .get(format!(
+                    "{}/3/search/{media_type}",
+                    self.tmdb_base.trim_end_matches('/')
+                ))
                 .query(&[
                     ("api_key", s.tmdb_api_key.as_str()),
                     ("query", query),

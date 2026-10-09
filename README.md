@@ -89,6 +89,8 @@ docker compose up -d --build
 | `RE0_GATEWAY_URL` | `https://re0.tgtodrive.top` | 新数据目录初始化时的中转地址 |
 | `RE0_INSTALL_ID` | 随机生成 | 新数据目录初始化时的安装标识 |
 | `RE0DRIVE_COOKIE_SECURE` | `0` | 强制设置 HTTPS 会话 Cookie |
+| `RE0DRIVE_115_BASE_URL` | `https://webapi.115.com` | 115 分享接口地址；仅用于离线测试或自建代理 |
+| `RE0DRIVE_TMDB_BASE_URL` | `https://api.themoviedb.org` | TMDB 接口地址；仅用于离线测试或自建代理 |
 | `TZ` | 镜像为 `Asia/Hong_Kong` | 每日签到使用的本地时区 |
 | `RUST_LOG` | `re0drive=info,tower_http=info` | 日志级别 |
 
@@ -105,8 +107,11 @@ docker compose up -d --build
 ## 验证
 
 ```sh
-cargo test --locked
+cargo test --locked                       # 16 项：协议向量 + 本地 HTTP 流程
+cargo build --release --locked && tests/smoke.sh   # 34 项端到端冒烟测试
 ```
+
+`tests/smoke.sh` 自带环境：在随机本地端口启动 `tests/mock_upstream.py`（RE0 中转 + 115 + TMDB 替身，用测试密钥校验每个请求的 HMAC）和一个全新数据目录的 RE0Drive，所有外部地址都指向替身；同时把代理设为一个关闭的本地端口作为“绊线”，任何意外的非本机请求都会直接失败，不会离开本机。覆盖：静态资源与 CSP、管理员/会话/CSRF、演示模式、写入式凭据与加密存储、签名、授权链接、签到、搜索排序、积分上限拦截、115 分页接收、订阅自动转存、停用/删除、退出。
 
 协议测试对照原客户端回放中的已知 HMAC 向量；本地 HTTP 集成测试覆盖真实序列化请求、积分拦截、115 多页文件/目录接收、去重、异常结果保留、重启恢复、会话与配置加密。
 

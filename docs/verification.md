@@ -36,3 +36,10 @@ Release 编译成功，Linux x86_64 单个可执行文件约 8.6 MiB，内嵌网
 从本地成品导入连接密钥后，独立 Rust 客户端发送未授权安装标识的只读 `/api/token/status` 请求，成功返回 `authorized:false`。没有发送真实账号的签到、解锁或 115 转存请求。
 
 真实 OAuth 授权、资源响应字段、积分计费和 115 接收仍需要连接账号后联调。当前环境没有 Docker CLI / daemon，提供的 Dockerfile 与 Compose 尚未构建运行验证。
+
+## 接手后复验（2026-10-09 19:5x HKT）
+
+- `cargo test --locked`：16/16 通过。
+- `tests/smoke.sh`（自带 mock + 代理绊线，不访问任何真实外部服务）：34/34 通过。
+- 恢复 `RE0DRIVE_115_BASE_URL`，新增 `RE0DRIVE_TMDB_BASE_URL`，使测试能把全部外部端点指向本地替身。
+- 浏览器（1440×1000 / 390×844）：创建管理员 → 搜索 → 转存弹窗 → 任务队列 → 写入 Cookie（不回显）；无 JS 运行错误、手机无横向溢出。
