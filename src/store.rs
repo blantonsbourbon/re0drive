@@ -1,5 +1,5 @@
 use crate::models::{Activity, Job, Settings, Subscription};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use chacha20poly1305::{aead::{Aead, KeyInit}, ChaCha20Poly1305, Nonce};
 use rand::RngCore;
