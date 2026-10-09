@@ -279,6 +279,8 @@
                         id="check-re0"
                       >
                         检查授权</button
+                      ><button class="button secondary" type="button" id="re0-qr">
+                        扫码授权 RE0</button
                       ><button class="button ghost" type="button" id="checkin">
                         今日签到
                       </button>
@@ -291,6 +293,12 @@
                     <div class="panel-heading">
                       <h2><span class="section-icon">115</span> 115 网盘</h2>
                       <span id="cookie-state" class="pill neutral">未配置</span>
+                    </div>
+                    <div class="button-row qr-row">
+                      <button class="button secondary" type="button" id="qr115">
+                        扫码登录 115
+                      </button>
+                      <span class="helper-text">用 115 App 扫码，登录后 Cookie 自动加密保存；也可以在下方手动粘贴。</span>
                     </div>
                     <label
                       >115 Cookie<textarea
@@ -481,6 +489,28 @@
           ><button class="button primary" type="submit">保存订阅</button>
         </div>
       </form>
+    </dialog>
+    <dialog id="qr-dialog">
+      <div class="qr-box">
+        <div class="dialog-heading">
+          <div>
+            <span class="eyebrow">SCAN TO SIGN IN</span>
+            <h2 id="qr-title">扫码登录</h2>
+          </div>
+          <button type="button" class="icon-button" data-close="qr-dialog" aria-label="关闭">×</button>
+        </div>
+        <label id="qr-app-row"
+          >登录端<select id="qr-app"></select
+          ><small>同一登录端同时只能在线一个，会把该端已有的登录挤下线，建议选不常用的端。</small></label
+        >
+        <div class="qr-frame"><img id="qr-img" alt="登录二维码" width="240" height="240" /></div>
+        <p class="qr-status"><span id="qr-state" class="pill neutral">准备中</span><span id="qr-message"></span></p>
+        <p id="qr-link" class="helper-text"></p>
+        <div class="dialog-actions">
+          <button type="button" class="button secondary" id="qr-refresh">刷新二维码</button>
+          <button type="button" class="button ghost" data-close="qr-dialog">关闭</button>
+        </div>
+      </div>
     </dialog>
     <dialog id="transfer-dialog">
       <form id="transfer-form">

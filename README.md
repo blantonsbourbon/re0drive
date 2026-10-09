@@ -59,6 +59,13 @@ docker compose start re0drive
 
 ## 连接账号
 
+### 扫码登录（推荐）
+
+- **115**：“连接与设置 → 115 网盘 → 扫码登录 115”。选择登录端（默认支付宝小程序端），用 115 App 扫码并确认。流程与 p115client / TgtoDrive 相同：`qrcodeapi.115.com` 获取令牌 → 轮询 `/get/status/`（等待 / 已扫码 / 已确认 / 已过期 / 已取消）→ `/app/1.0/{端}/1.0/login/qrcode/` 换取 Cookie。Cookie 直接在服务器端加密保存，不经过浏览器。**同一登录端同时只能在线一个**，会挤掉该端已有的登录，建议选不常用的端。
+- **RE0**：中转服务没有原生扫码接口，其授权入口是签名的 `/auth/start` 链接。“扫码授权 RE0”把这个链接渲染成二维码（也可点链接在本机打开），用手机完成 re0.me 授权后，页面每 3 秒查询中转 `/api/token/status`，授权成功自动显示。需要先切到中转 API 模式并保存签名密钥。二维码 10 分钟后过期，可点“刷新二维码”。
+
+### 手动配置
+
 1. 在“连接与设置”保留默认中转地址，保存配置。
 2. 点击“授权 RE0”，打开生成的链接，在 RE0 完成 OAuth 授权，回到 App 检查授权状态。
 3. 填写目标 115 账号的 Cookie，例如 `UID=…; CID=…; SEID=…; KID=…`。这里只使用 Cookie 分享接收接口，不申请 115 OpenAPI。
@@ -90,6 +97,7 @@ docker compose up -d --build
 | `RE0_INSTALL_ID` | 随机生成 | 新数据目录初始化时的安装标识 |
 | `RE0DRIVE_COOKIE_SECURE` | `0` | 强制设置 HTTPS 会话 Cookie |
 | `RE0DRIVE_115_BASE_URL` | `https://webapi.115.com` | 115 分享接口地址；仅用于离线测试或自建代理 |
+| `RE0DRIVE_115_QR_BASE_URL` | `https://qrcodeapi.115.com` | 115 扫码登录接口地址；仅用于离线测试 |
 | `RE0DRIVE_TMDB_BASE_URL` | `https://api.themoviedb.org` | TMDB 接口地址；仅用于离线测试或自建代理 |
 | `TZ` | 镜像为 `Asia/Hong_Kong` | 每日签到使用的本地时区 |
 | `RUST_LOG` | `re0drive=info,tower_http=info` | 日志级别 |
@@ -107,11 +115,11 @@ docker compose up -d --build
 ## 验证
 
 ```sh
-cargo test --locked                       # 16 项：协议向量 + 本地 HTTP 流程
-cargo build --release --locked && tests/smoke.sh   # 34 项端到端冒烟测试
+cargo test --locked                       # 21 项：协议向量 + 本地 HTTP 流程 + 扫码登录
+cargo build --release --locked && tests/smoke.sh   # 42 项端到端冒烟测试
 ```
 
-`tests/smoke.sh` 自带环境：在随机本地端口启动 `tests/mock_upstream.py`（RE0 中转 + 115 + TMDB 替身，用测试密钥校验每个请求的 HMAC）和一个全新数据目录的 RE0Drive，所有外部地址都指向替身；同时把代理设为一个关闭的本地端口作为“绊线”，任何意外的非本机请求都会直接失败，不会离开本机。覆盖：静态资源与 CSP、管理员/会话/CSRF、演示模式、写入式凭据与加密存储、签名、授权链接、签到、搜索排序、积分上限拦截、115 分页接收、订阅自动转存、停用/删除、退出。
+`tests/smoke.sh` 自带环境：在随机本地端口启动 `tests/mock_upstream.py`（RE0 中转 + 115 + TMDB 替身，用测试密钥校验每个请求的 HMAC）和一个全新数据目录的 RE0Drive，所有外部地址都指向替身；同时把代理设为一个关闭的本地端口作为“绊线”，任何意外的非本机请求都会直接失败，不会离开本机。覆盖：115 / RE0 扫码登录、静态资源与 CSP、管理员/会话/CSRF、演示模式、写入式凭据与加密存储、签名、授权链接、签到、搜索排序、积分上限拦截、115 分页接收、订阅自动转存、停用/删除、退出。
 
 协议测试对照原客户端回放中的已知 HMAC 向量；本地 HTTP 集成测试覆盖真实序列化请求、积分拦截、115 多页文件/目录接收、去重、异常结果保留、重启恢复、会话与配置加密。
 

@@ -681,6 +681,97 @@ $("#checkin").addEventListener("click", (e) =>
     await refresh();
   }),
 );
+/* ---------- QR login (115 / RE0) ---------- */
+const qr = { kind: null, uid: null, gen: 0 };
+const qrLabels = {
+  loading: ["准备中", "neutral"],
+  waiting: ["等待扫码", "neutral"],
+  scanned: ["已扫码", "warning"],
+  confirmed: ["已确认", "success"],
+  expired: ["已过期", "danger"],
+  canceled: ["已取消", "danger"],
+  error: ["出错", "danger"],
+};
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+function qrState(st, msg) {
+  const [label, cls] = qrLabels[st] || [st, "neutral"];
+  const el = $("#qr-state");
+  el.textContent = label;
+  el.className = `pill ${cls}`;
+  $("#qr-message").textContent = msg || "";
+  $(".qr-frame").classList.toggle("dim", ["expired", "canceled", "error", "confirmed"].includes(st));
+}
+async function qrOpen(kind) {
+  qr.kind = kind;
+  $("#qr-title").textContent = kind === "115" ? "扫码登录 115" : "扫码授权 RE0";
+  $("#qr-app-row").hidden = kind !== "115";
+  if (kind === "115" && !$("#qr-app").options.length) {
+    const r = await api("/api/login/115/apps");
+    $("#qr-app").replaceChildren(...r.apps.map((a) => h("option", { value: a.id }, a.label)));
+  }
+  $("#qr-dialog").showModal();
+  qrStart();
+}
+async function qrStart() {
+  const gen = ++qr.gen;
+  qrState("loading", "正在获取二维码…");
+  $("#qr-img").removeAttribute("src");
+  $("#qr-link").replaceChildren();
+  try {
+    const r =
+      qr.kind === "115"
+        ? await api("/api/login/115/start", "POST", { app: $("#qr-app").value })
+        : await api("/api/login/re0/start", "POST");
+    if (gen !== qr.gen) return;
+    qr.uid = r.uid || null;
+    $("#qr-img").src = r.qr;
+    if (r.url) {
+      const url = new URL(r.url);
+      if (["https:", "http:"].includes(url.protocol))
+        $("#qr-link").replaceChildren(
+          "无法扫码时可",
+          h("a", { href: url.href, target: "_blank", rel: "noopener noreferrer" }, "在本机打开授权页 ↗"),
+        );
+    }
+    qrState("waiting", qr.kind === "115" ? "请用 115 App 扫一扫" : "请用手机扫码，在 RE0 页面完成授权");
+    qrPoll(gen);
+  } catch (e) {
+    if (gen === qr.gen) qrState("error", e.message);
+  }
+}
+async function qrPoll(gen) {
+  while (gen === qr.gen && $("#qr-dialog").open) {
+    let r;
+    try {
+      r =
+        qr.kind === "115"
+          ? await api(`/api/login/115/status?uid=${encodeURIComponent(qr.uid)}`)
+          : await api("/api/login/re0/status");
+    } catch (e) {
+      if (gen !== qr.gen) return;
+      qrState("error", `${e.message}（5 秒后重试）`);
+      await sleep(5000);
+      continue;
+    }
+    if (gen !== qr.gen) return;
+    qrState(r.status, r.message);
+    if (r.status === "confirmed") {
+      toast(r.message);
+      await loadSettings();
+      await refresh();
+      if (qr.kind === "re0") $("#check-re0").click();
+      setTimeout(() => $("#qr-dialog").open && $("#qr-dialog").close(), 1500);
+      return;
+    }
+    if (["expired", "canceled", "error"].includes(r.status)) return;
+    await sleep(qr.kind === "115" ? 800 : 3000);
+  }
+}
+$("#qr-dialog").addEventListener("close", () => qr.gen++);
+$("#qr-refresh").addEventListener("click", () => qrStart());
+$("#qr-app").addEventListener("change", () => qrStart());
+$("#qr115").addEventListener("click", (e) => busy(e.currentTarget, () => qrOpen("115")));
+$("#re0-qr").addEventListener("click", (e) => busy(e.currentTarget, () => qrOpen("re0")));
 api("/api/auth/status")
   .then((s) => (s.authenticated ? start() : showAuth()))
   .catch((e) => toast(e.message, true));

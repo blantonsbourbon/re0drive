@@ -12,6 +12,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 9799
 KEY = (sys.argv[2] if len(sys.argv) > 2 else "mock-test-key").encode()
 CALLS = []
+AUTHED = set()      # install_ids that completed /auth/start (simulated scan)
+QR_POLLS = {}       # 115 qr uid -> poll count
 POINTS = {"m_cheap": 2, "m_pricey": 50, "m_owned": 0}
 
 def canonical(method, path, query, inst, ts, nonce, body):
@@ -26,6 +28,29 @@ class H(BaseHTTPRequestHandler):
     def handle_any(self, method):
         u = urllib.parse.urlsplit(self.path); body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
         if u.path == "/_calls": return self.send(CALLS)
+        # ---- 115 QR login (qrcodeapi.115.com stand-in): waiting -> scanned -> confirmed ----
+        if u.path == "/api/1.0/web/1.0/token/":
+            CALLS.append({"m": method, "p": u.path})
+            return self.send({"state": 1, "code": 0, "data": {"uid": "mockqr1", "time": 1780000000, "sign": "mocksign", "qrcode": "https://115.com/scan/dg-mockqr1"}})
+        if u.path == "/get/status/":
+            q = urllib.parse.parse_qs(u.query)
+            if q.get("sign") != ["mocksign"]: return self.send({"state": 0, "message": "bad sign"})
+            uid = q["uid"][0]; n = QR_POLLS[uid] = QR_POLLS.get(uid, 0) + 1
+            CALLS.append({"m": method, "p": u.path, "n": n})
+            return self.send({"state": 1, "code": 0, "data": {"status": min(n - 1, 2), "msg": ""}})
+        if u.path.startswith("/app/1.0/") and u.path.endswith("/1.0/login/qrcode/"):
+            form = urllib.parse.parse_qs(body.decode())
+            CALLS.append({"m": method, "p": u.path, "account": form.get("account", [""])[0]})
+            if QR_POLLS.get(form.get("account", [""])[0], 0) < 3: return self.send({"state": 0, "message": "not confirmed"})
+            return self.send({"state": 1, "data": {"user_id": 7, "user_name": "mock-115", "cookie": {"UID": "7_R2_1", "CID": "mockcid", "SEID": "mockseid", "KID": "mockkid"}}})
+        # ---- RE0 relay OAuth entry: a signed GET with query params; visiting it == user finished the scan ----
+        if u.path == "/auth/start":
+            q = urllib.parse.parse_qs(u.query, keep_blank_values=True)
+            g = lambda k: q.get(k, [""])[0]
+            exp = hmac.new(KEY, canonical("GET", u.path, u.query, g("install_id"), g("ts"), g("nonce"), b"").encode(), hashlib.sha256).hexdigest()
+            ok = hmac.compare_digest(exp, g("sig")); CALLS.append({"m": method, "p": u.path, "sig_ok": ok})
+            if ok: AUTHED.add(g("install_id"))
+            return self.send({"ok": ok}, 200 if ok else 401)
         if u.path.startswith("/share/"):
             CALLS.append({"m": method, "p": u.path, "q": u.query, "cookie": bool(self.headers.get("Cookie")), "body": body.decode()})
             if u.path == "/share/snap":
@@ -39,7 +64,7 @@ class H(BaseHTTPRequestHandler):
         CALLS.append({"m": method, "p": u.path, "sig_ok": ok, "body": body.decode()})
         if not ok: return self.send({"success": False, "code": "401", "message": "bad signature"}, 401)
         ok_ = lambda d: self.send({"success": True, "code": "200", "data": d})
-        if u.path == "/api/token/status": return ok_({"has_access_token": True})
+        if u.path == "/api/token/status": return ok_({"has_access_token": h.get("X-Install-Id") in AUTHED})
         if u.path == "/api/me": return ok_({"nickname": "mock-user", "points": 42, "level": "Lv3"})
         if u.path == "/api/checkin": return ok_({"message": "签到成功（mock）", "points": 1})
         if u.path.startswith("/api/resources/") and method == "GET":

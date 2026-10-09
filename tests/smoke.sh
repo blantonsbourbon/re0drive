@@ -15,7 +15,7 @@ python3 tests/mock_upstream.py "$MP" mock-test-key >"$TMP/mock.log" 2>&1 & MOCK_
 env HTTP_PROXY=http://127.0.0.1:9 HTTPS_PROXY=http://127.0.0.1:9 ALL_PROXY=http://127.0.0.1:9 NO_PROXY=127.0.0.1,localhost \
   http_proxy=http://127.0.0.1:9 https_proxy=http://127.0.0.1:9 all_proxy=http://127.0.0.1:9 no_proxy=127.0.0.1,localhost \
   RE0DRIVE_DATA="$DATA" RE0DRIVE_BIND=127.0.0.1:$SP RE0_GATEWAY_URL="$MOCK" \
-  RE0DRIVE_115_BASE_URL="$MOCK" RE0DRIVE_TMDB_BASE_URL="$MOCK" "$BIN" >"$TMP/server.log" 2>&1 & SRV_PID=$!
+  RE0DRIVE_115_BASE_URL="$MOCK" RE0DRIVE_TMDB_BASE_URL="$MOCK" RE0DRIVE_115_QR_BASE_URL="$MOCK" "$BIN" >"$TMP/server.log" 2>&1 & SRV_PID=$!
 trap 'kill $SRV_PID $MOCK_PID 2>/dev/null; wait 2>/dev/null; rm -rf "$TMP"' EXIT
 for _ in $(seq 1 50); do curl -sf $BASE/health >/dev/null && curl -s $MOCK/_calls >/dev/null && break; sleep 0.2; done
 JAR=$(mktemp); PASS=0; FAILN=0
@@ -49,6 +49,10 @@ ok "demo checkin" 'c -X POST $BASE/api/accounts/checkin | grep -q demo'
 ok "save gateway settings" 'c -X PUT -d "{\"mode\":\"gateway\",\"re0_base_url\":\"$MOCK\",\"install_id\":\"inst_smoke\",\"default_target_cid\":\"123\",\"default_max_points\":4,\"checkin_enabled\":false,\"re0_shared_secret\":\"mock-test-key\",\"cookie_115\":\"UID=fake; CID=fake\"}" $BASE/api/settings | grep -q "\"has_115_cookie\":true"'
 ok "secrets not echoed" '! c $BASE/api/settings | grep -q -e mock-test-key -e UID=fake'
 ok "secrets encrypted at rest" '! grep -a -q -e mock-test-key -e UID=fake $DATA/re0drive.db* 2>/dev/null'
+ok "re0 qr start renders svg qr" 'c -X POST $BASE/api/login/re0/start > $TMP/re0qr.json && j "d[\"qr\"]" < $TMP/re0qr.json | grep -q "^data:image/svg+xml;base64,"'
+ok "re0 qr waiting before scan" '[ "$(c $BASE/api/login/re0/status | j d[\"status\"])" = waiting ]'
+curl -s "$(j 'd["url"]' < $TMP/re0qr.json)" >/dev/null   # simulate the phone finishing OAuth at the relay
+ok "re0 qr confirmed after scan" '[ "$(c $BASE/api/login/re0/status | j d[\"status\"])" = confirmed ]'
 ok "re0 status authorized" '[ "$(c $BASE/api/accounts/re0/status | j d[\"user\"][\"nickname\"])" = mock-user ]'
 ok "authorize url" 'c -X POST $BASE/api/accounts/re0/authorize | grep -q "auth/start?install_id=inst_smoke"'
 ok "gateway checkin" 'c -X POST $BASE/api/accounts/checkin | grep -q mock'
@@ -66,6 +70,13 @@ CALLS=$(curl -s $MOCK/_calls)
 ok "all relay signatures valid" '[ "$(echo "$CALLS" | j "all(x[\"sig_ok\"] for x in d if \"sig_ok\" in x)")" = True ]'
 ok "pricey never unlocked" '! echo "$CALLS" | grep -q "m_pricey\\\\\"}"'
 ok "115 receive got cookie+ids" 'echo "$CALLS" | j "[x for x in d if x[\"p\"]==\"/share/receive\"][0]" | grep -q "share_code=swmcheap&receive_code=ab12&file_id=111%2C222&cid=123"'
+
+# 115 QR login: waiting -> scanned -> confirmed, cookie replaced and kept write-only
+ok "115 qr apps list" 'c $BASE/api/login/115/apps | grep -q alipaymini'
+ok "115 qr rejects unknown app" '[ $(c -o /dev/null -w %{http_code} -X POST -d "{\"app\":\"x/y\"}" $BASE/api/login/115/start) = 400 ]'
+ok "115 qr start" 'c -X POST -d "{\"app\":\"alipaymini\"}" $BASE/api/login/115/start | j "d[\"uid\"]+\" \"+d[\"qr\"][:26]" | grep -q "^mockqr1 data:image/svg+xml;base64"'
+ok "115 qr status sequence" '[ "$(for _ in 1 2 3; do c "$BASE/api/login/115/status?uid=mockqr1" | j d[\"status\"]; done | tr "\n" ,)" = "waiting,scanned,confirmed," ]'
+ok "115 qr cookie saved, not echoed" 'S2=$(c $BASE/api/settings); echo "$S2" | grep -q "\"has_115_cookie\":true" && ! echo "$S2" | grep -q mockseid && ! grep -a -q mockseid $DATA/re0drive.db*'
 
 # subscription auto flow
 SUB=$(c -X POST -d '{"name":"Mock sub","query":"tmdb:1","media_type":"movie","target_cid":"456","max_points":4,"quality":"1080p","interval_minutes":30,"auto_transfer":true,"enabled":true}' $BASE/api/subscriptions | j 'd["id"]')

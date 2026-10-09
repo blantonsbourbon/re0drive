@@ -31,6 +31,11 @@ pub fn router(engine: App) -> Router {
         .route("/api/accounts/re0/status", get(re0_status))
         .route("/api/accounts/re0/authorize", post(authorize))
         .route("/api/accounts/checkin", post(checkin))
+        .route("/api/login/115/apps", get(qr115_apps))
+        .route("/api/login/115/start", post(qr115_start))
+        .route("/api/login/115/status", get(qr115_status))
+        .route("/api/login/re0/start", post(re0_qr_start))
+        .route("/api/login/re0/status", get(re0_qr_status))
         .route(
             "/api/subscriptions",
             get(subscriptions).post(save_subscription),
@@ -520,4 +525,31 @@ async fn retry_job(
     job.updated_at = crate::store::now();
     app.store.save_job(&job).await?;
     Ok(Json(json!({"ok":true})))
+}
+
+async fn qr115_apps() -> Json<Value> {
+    Json(json!({"apps": crate::qrlogin::APPS_115.iter().map(|(id, label)| json!({"id": id, "label": label})).collect::<Vec<_>>()}))
+}
+#[derive(Deserialize)]
+struct QrStart {
+    app: String,
+}
+async fn qr115_start(State(app): State<App>, Json(v): Json<QrStart>) -> Result<Json<Value>> {
+    Ok(Json(app.qr115_start(&v.app).await?))
+}
+#[derive(Deserialize)]
+struct QrPoll {
+    uid: String,
+}
+async fn qr115_status(State(app): State<App>, axum::extract::Query(q): axum::extract::Query<QrPoll>) -> Result<Json<Value>> {
+    if q.uid.is_empty() || q.uid.len() > 64 || !q.uid.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') {
+        return Err(AppError::bad("二维码标识无效"));
+    }
+    Ok(Json(app.qr115_status(&q.uid).await?))
+}
+async fn re0_qr_start(State(app): State<App>) -> Result<Json<Value>> {
+    Ok(Json(app.re0_qr_start().await?))
+}
+async fn re0_qr_status(State(app): State<App>) -> Result<Json<Value>> {
+    Ok(Json(app.re0_qr_status().await?))
 }

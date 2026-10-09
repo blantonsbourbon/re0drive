@@ -13,6 +13,7 @@ pub struct Engine {
     pub store: Store,
     pub providers: Providers,
     pub config_lock: Mutex<()>,
+    pub qr: crate::qrlogin::QrSessions,
 }
 impl Engine {
     pub fn new(store: Store) -> Self {
@@ -23,6 +24,7 @@ impl Engine {
             store,
             providers,
             config_lock: Mutex::new(()),
+            qr: Default::default(),
         }
     }
     pub async fn enqueue(

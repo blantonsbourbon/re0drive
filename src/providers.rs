@@ -14,12 +14,14 @@ pub struct Providers {
     pub http: Client,
     share_base: String,
     tmdb_base: String,
+    pub(crate) qr_base: String,
     gateway_slots: Arc<tokio::sync::Semaphore>,
 }
 impl Providers {
     /// Production endpoints, overridable for offline testing / self-hosted proxies:
     /// `RE0DRIVE_115_BASE_URL` (default https://webapi.115.com) and
-    /// `RE0DRIVE_TMDB_BASE_URL` (default https://api.themoviedb.org).
+    /// `RE0DRIVE_TMDB_BASE_URL` (default https://api.themoviedb.org),
+    /// `RE0DRIVE_115_QR_BASE_URL` (default https://qrcodeapi.115.com).
     pub fn new() -> Self {
         let env = |k: &str, d: &str| {
             std::env::var(k)
@@ -32,6 +34,7 @@ impl Providers {
             env("RE0DRIVE_115_BASE_URL", "https://webapi.115.com"),
             env("RE0DRIVE_TMDB_BASE_URL", "https://api.themoviedb.org"),
         )
+        .with_qr_base(env("RE0DRIVE_115_QR_BASE_URL", "https://qrcodeapi.115.com"))
     }
     pub fn with_share_base(share_base: String) -> Self {
         Self::with_bases(share_base, "https://api.themoviedb.org".into())
@@ -48,8 +51,13 @@ impl Providers {
                 .expect("HTTP client"),
             share_base,
             tmdb_base,
+            qr_base: "https://qrcodeapi.115.com".into(),
             gateway_slots: Arc::new(tokio::sync::Semaphore::new(4)),
         }
+    }
+    pub fn with_qr_base(mut self, qr_base: String) -> Self {
+        self.qr_base = qr_base;
+        self
     }
     pub async fn gateway(
         &self,
@@ -597,7 +605,7 @@ pub fn normalize_resources(v: &Value) -> Vec<Resource> {
     walk(v, "", &mut result, 0);
     result
 }
-async fn read_json(mut response: Response, label: &str) -> Result<Value> {
+pub(crate) async fn read_json(mut response: Response, label: &str) -> Result<Value> {
     let status = response.status();
     let mut bytes = vec![];
     while let Some(chunk) = response

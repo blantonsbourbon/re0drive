@@ -1560,3 +1560,13 @@ dialog::backdrop {
     display: none;
   }
 }
+
+.qr-row{align-items:center;flex-wrap:wrap;margin:0 0 14px}
+.qr-row .helper-text{margin:0}
+#qr-app-row{display:flex;flex-direction:column;gap:6px;margin-bottom:16px}
+.qr-frame{display:grid;place-items:center;width:264px;height:264px;margin:0 auto;border:1px solid #dce5d4;border-radius:14px;background:#fff}
+.qr-frame img{width:240px;height:240px;image-rendering:pixelated}
+.qr-frame img:not([src]){visibility:hidden}
+.qr-frame.dim img{opacity:.18;filter:blur(2px)}
+.qr-status{display:flex;align-items:center;justify-content:center;gap:10px;margin:16px 0 4px;text-align:center}
+#qr-link{text-align:center;word-break:break-all}
