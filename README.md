@@ -7,6 +7,9 @@
 ## 功能
 
 - 片名搜索（配置 TMDB Key），或直接使用 `tmdb:693134` / 数字 ID 搜索。
+- **NullBR 回退**：中转返回空时，用公开 NullBR API（`GET /{movie|tv}/{tmdb}/115`，文档见 [nullbr.readthedocs.io](https://nullbr.readthedocs.io/)）按 TMDB ID 查询；结果标记 `origin=nullbr`，115 分享可选中转存（无需 RE0 解锁），非 115 为 `selectable:false`。两边都空则返回空列表。App ID / API Key 自行配置，加密保存。
+- **115 Cookie 保活**：定期只读探测；失效时写活动日志并（可选）Telegram 告警，到设置页扫码重登。Cookie 始终加密、不回显。
+- **Telegram 机器人**：长轮询（无需 Webhook）。白名单 chat/user 可搜索、点按钮确认转存、签到、查 Cookie/任务；Token 加密保存。
 - 搜索结果保留中转返回的全部版本信息：`pan_type`、`share_size`、`video_resolution`/`source`/`subtitle_language`/`subtitle_type`（数组原样）、积分、`remark`。非 115 资源（夸克、百度、阿里、迅雷、189、139、ED2K…）照常列出，但 `selectable:false`、没有转存按钮。交互搜索**不按积分上限过滤**。
 - 电影、剧集订阅：定时检查并把匹配的 115 版本记为“候选”，**从不自动解锁/转存**（包括 0 积分资源和旧的 `auto_transfer=true` 订阅），由人或 Hermes 选定版本后再提交任务。订阅默认积分上限 20，`auto_transfer` 默认关闭且已不生效。
 - 接收成功后列出目标目录，按文件名匹配出**本地 fid**（目录为本地 cid）写入任务结果，供 Hermes 自行移动整理；本 App 不移动文件。
@@ -129,6 +132,18 @@ docker compose pull && docker compose up -d
 
 当前实现支持 **115 分享链接转存**。ED2K 只列出（`selectable:false`），离线下载需单独确认流程，未实现；整季/单集语义、115 目录整理（由 Hermes 负责移动）和多账号自动切换不在本版范围内；订阅的版本与关键词筛选作用于标题、画质、分辨率、来源、字幕和备注。
 
+## NullBR / Cookie / Telegram 配置
+
+在网页「连接与设置」中填写（全部写入加密配置，密钥类字段不回显）：
+
+| 项 | 说明 |
+|---|---|
+| NullBR 启用 / 地址 / App ID / API Key | 默认地址 `https://api.nullbr.eu.org`；App ID + API Key 在 [NullBR](https://nullbr.readthedocs.io/) 自行申请。仅当 RE0 中转对某个 TMDB ID 返回空时才会请求 NullBR。 |
+| Cookie 保活启用 / 间隔（分钟） | 默认开启、360 分钟。也可点「立即检查」。失效后请扫码重登 115。 |
+| Telegram 启用 / Bot Token / 白名单 | Token 来自 @BotFather；白名单为数字 chat/user id（逗号分隔）。进程内长轮询 `getUpdates`，可用环境变量 `RE0DRIVE_TG_BASE_URL` 指向自建 Bot API（测试用）。 |
+
+命令：`/search` `/movie` `/tv` `/checkin` `/cookie` `/jobs`；搜索结果带 inline 按钮，点选后才入队转存（仍遵守「先选版本再解锁」、NullBR 直链跳过解锁）。
+
 ## Hermes / 机器调用 API
 
 Hermes 用**机器令牌**调用，不依赖浏览器 Cookie：
@@ -184,8 +199,8 @@ curl -s -H "Authorization: Bearer $TOKEN" $RE0DRIVE/api/jobs/<job_id>
 ## 验证
 
 ```sh
-cargo test --locked                       # 28 项：协议向量 + 本地 HTTP 流程 + 扫码登录 + Hermes 验收（tests/hermes.rs）
-cargo build --release --locked && tests/smoke.sh   # 58 项端到端冒烟测试
+cargo test --locked                       # 协议 / 流程 / 扫码 / Hermes / NullBR·Cookie·Telegram（tests/features.rs）
+cargo build --release --locked && tests/smoke.sh   # 端到端冒烟（含 tripwire）
 ```
 
 `tests/smoke.sh` 自带环境：在随机本地端口启动 `tests/mock_upstream.py`（RE0 中转 + 115 + TMDB 替身，用测试密钥校验每个请求的 HMAC）和一个全新数据目录的 RE0Drive，所有外部地址都指向替身；同时把代理设为一个关闭的本地端口作为“绊线”，任何意外的非本机请求都会直接失败，不会离开本机。覆盖：115 / RE0 扫码登录、静态资源与 CSP、管理员/会话/CSRF、演示模式、写入式凭据与加密存储、签名、授权链接、签到、搜索排序与完整字段（含数组、非 115 不可选）、空结果不回落演示数据、积分上限拦截、115 分页接收与本地 fid 回填、机器令牌（只显示一次、哈希存储、轮换失效、权限范围）、订阅只列候选不解锁、停用/删除、退出。

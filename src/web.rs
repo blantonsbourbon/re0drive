@@ -30,6 +30,7 @@ pub fn router(engine: App) -> Router {
         .route("/api/accounts/re0/status", get(re0_status))
         .route("/api/accounts/re0/authorize", post(authorize))
         .route("/api/accounts/checkin", post(checkin))
+        .route("/api/accounts/115/cookie-status", get(cookie_status).post(cookie_check))
         .route("/api/login/115/apps", get(qr115_apps))
         .route("/api/login/115/start", post(qr115_start))
         .route("/api/login/115/status", get(qr115_status))
@@ -382,7 +383,30 @@ struct SettingsUpdate {
     clear_tmdb_key: bool,
     #[serde(default)]
     clear_115_cookie: bool,
+    #[serde(default)]
+    nullbr_enabled: bool,
+    #[serde(default)]
+    nullbr_base_url: String,
+    #[serde(default)]
+    nullbr_app_id: String,
+    #[serde(default)]
+    nullbr_api_key: String,
+    #[serde(default)]
+    clear_nullbr_key: bool,
+    #[serde(default)]
+    cookie_check_enabled: bool,
+    #[serde(default = "default_cookie_mins")]
+    cookie_check_minutes: u32,
+    #[serde(default)]
+    tg_enabled: bool,
+    #[serde(default)]
+    tg_bot_token: String,
+    #[serde(default)]
+    tg_allowed_chats: String,
+    #[serde(default)]
+    clear_tg_token: bool,
 }
+fn default_cookie_mins() -> u32 { 360 }
 async fn save_settings(
     State(app): State<App>,
     Json(v): Json<SettingsUpdate>,
@@ -407,8 +431,21 @@ async fn save_settings(
         || v.install_id.len() > 200
         || v.install_id.contains(['\r', '\n'])
         || v.cookie_115.contains(['\r', '\n'])
+        || !(5..=1440).contains(&v.cookie_check_minutes)
+        || v.nullbr_base_url.len() > 300
+        || v.nullbr_app_id.len() > 200
+        || v.tg_allowed_chats.len() > 500
+        || v.tg_bot_token.contains(['\r', '\n'])
+        || v.nullbr_api_key.contains(['\r', '\n'])
     {
         return Err(AppError::bad("目录、积分上限或账号配置无效"));
+    }
+    let nullbr_base = v.nullbr_base_url.trim().trim_end_matches('/');
+    if !nullbr_base.is_empty() {
+        let u = url::Url::parse(nullbr_base).map_err(|_| AppError::bad("NullBR 地址无效"))?;
+        if !matches!(u.scheme(), "https" | "http") || u.host_str().is_none() {
+            return Err(AppError::bad("NullBR 地址无效"));
+        }
     }
     let _guard = app.config_lock.lock().await;
     let mut s = app.store.settings().await?;
@@ -424,6 +461,24 @@ async fn save_settings(
     s.default_target_cid = v.default_target_cid;
     s.default_max_points = v.default_max_points;
     s.checkin_enabled = v.checkin_enabled;
+    s.nullbr_enabled = v.nullbr_enabled;
+    if !nullbr_base.is_empty() {
+        s.nullbr_base_url = nullbr_base.into();
+    }
+    s.nullbr_app_id = v.nullbr_app_id.trim().into();
+    s.cookie_check_enabled = v.cookie_check_enabled;
+    s.cookie_check_minutes = v.cookie_check_minutes;
+    s.tg_enabled = v.tg_enabled;
+    s.tg_allowed_chats = v
+        .tg_allowed_chats
+        .split([',', ' ', '\n'])
+        .filter_map(|x| {
+            let t = x.trim();
+            if t.is_empty() { None } else { t.parse::<i64>().ok().map(|n| n.to_string()) }
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    let cookie_before = s.cookie_115.clone();
     for (target, value, clear) in [
         (
             &mut s.re0_shared_secret,
@@ -432,12 +487,20 @@ async fn save_settings(
         ),
         (&mut s.tmdb_api_key, v.tmdb_api_key, v.clear_tmdb_key),
         (&mut s.cookie_115, v.cookie_115, v.clear_115_cookie),
+        (&mut s.nullbr_api_key, v.nullbr_api_key, v.clear_nullbr_key),
+        (&mut s.tg_bot_token, v.tg_bot_token, v.clear_tg_token),
     ] {
         if clear {
             target.clear();
         } else if !value.trim().is_empty() {
             *target = value.trim().into();
         }
+    }
+    // Replacing the Cookie resets expiry state so a new login can be probed immediately.
+    if s.cookie_115 != cookie_before {
+        s.cookie_status = if s.cookie_115.is_empty() { "expired".into() } else { "unknown".into() };
+        s.cookie_checked_at = 0;
+        s.cookie_alerted = false;
     }
     app.store.save_settings(&s).await?;
     app.store
@@ -501,6 +564,27 @@ async fn authorize(State(app): State<App>) -> Result<Json<Value>> {
 }
 async fn checkin(State(app): State<App>) -> Result<Json<Value>> {
     Ok(Json(app.checkin().await?))
+}
+async fn cookie_status(State(app): State<App>) -> Result<Json<Value>> {
+    let s = app.store.settings().await?;
+    Ok(Json(json!({
+        "status": s.cookie_status,
+        "checked_at": s.cookie_checked_at,
+        "has_cookie": !s.cookie_115.is_empty(),
+        "check_enabled": s.cookie_check_enabled,
+        "check_minutes": s.cookie_check_minutes,
+    })))
+}
+async fn cookie_check(State(app): State<App>) -> Result<Json<Value>> {
+    // Force a probe now (bypass the interval).
+    {
+        let _g = app.config_lock.lock().await;
+        let mut s = app.store.settings().await?;
+        s.cookie_checked_at = 0;
+        app.store.save_settings(&s).await?;
+    }
+    app.cookie_keepalive().await.map_err(|e| AppError::upstream(e.to_string()))?;
+    cookie_status(State(app)).await
 }
 async fn subscriptions(State(app): State<App>) -> Result<Json<Vec<Subscription>>> {
     Ok(Json(app.store.subscriptions().await?))

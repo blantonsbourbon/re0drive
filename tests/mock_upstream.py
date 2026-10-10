@@ -60,6 +60,28 @@ class H(BaseHTTPRequestHandler):
             if u.path == "/share/receive":
                 if not self.headers.get("Cookie"): return self.send({"state": False, "error": "not logged in"})
                 return self.send({"state": True})
+        # NullBR public API shape (https://nullbr.readthedocs.io)
+        if (u.path.startswith("/movie/") or u.path.startswith("/tv/")) and u.path.endswith("/115"):
+            CALLS.append({"m": method, "p": u.path, "q": u.query, "app": self.headers.get("X-APP-ID"), "key": bool(self.headers.get("X-API-KEY"))})
+            if not self.headers.get("X-APP-ID") or not self.headers.get("X-API-KEY"):
+                return self.send({"message": "unauthorized"}, 401)
+            if u.path.endswith("/999/115"):
+                return self.send({"id": 999, "media_type": "movie", "page": 1, "total_page": 1, "items": []})
+            return self.send({"id": 1, "media_type": "movie", "page": 1, "total_page": 1, "items": [
+                {"title": "NullBR Mock 2160p", "size": "40 GB", "share_link": "https://115.com/s/swnullbr?password=ab12",
+                 "resolution": "2160P", "quality": ["REMUX"]}]})
+        # Telegram Bot API (token in path)
+        if u.path.startswith("/bot"):
+            method_name = u.path.rsplit("/", 1)[-1]
+            CALLS.append({"m": method, "p": "/bot…/" + method_name})
+            body_j = {}
+            try: body_j = json.loads(body or b"{}")
+            except Exception: pass
+            if method_name == "getUpdates":
+                return self.send({"ok": True, "result": []})
+            if method_name in ("sendMessage", "answerCallbackQuery"):
+                return self.send({"ok": True, "result": {"message_id": 1}})
+            return self.send({"ok": False, "description": "unknown"}, 400)
         if u.path == "/files":  # 115 folder listing: received items get NEW local ids
             q = urllib.parse.parse_qs(u.query); cid = q.get("cid", [""])[0]
             CALLS.append({"m": method, "p": u.path, "q": u.query, "cookie": bool(self.headers.get("Cookie"))})

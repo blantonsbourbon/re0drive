@@ -13,6 +13,28 @@ pub struct Settings {
     pub default_max_points: i64,
     pub checkin_enabled: bool,
     pub last_checkin_day: String,
+    // --- NullBR fallback (public API: https://nullbr.readthedocs.io). User-registered credentials. ---
+    pub nullbr_enabled: bool,
+    pub nullbr_base_url: String,
+    /// The caller's own NullBR App ID (no default is shipped).
+    pub nullbr_app_id: String,
+    /// Secret; never echoed.
+    pub nullbr_api_key: String,
+    // --- 115 Cookie keep-alive ---
+    pub cookie_check_enabled: bool,
+    /// Minutes between validity checks.
+    pub cookie_check_minutes: u32,
+    /// "unknown" | "valid" | "expired" (runtime state, not a secret).
+    pub cookie_status: String,
+    pub cookie_checked_at: i64,
+    /// An expiry alert was already sent for the current cookie (reset when it becomes valid/replaced).
+    pub cookie_alerted: bool,
+    // --- Telegram bot (long polling) ---
+    pub tg_enabled: bool,
+    /// Secret; never echoed.
+    pub tg_bot_token: String,
+    /// Comma-separated numeric chat/user ids allowed to use the bot.
+    pub tg_allowed_chats: String,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -27,12 +49,37 @@ impl Default for Settings {
             default_max_points: 20,
             checkin_enabled: false,
             last_checkin_day: String::new(),
+            nullbr_enabled: false,
+            nullbr_base_url: "https://api.nullbr.eu.org".into(),
+            nullbr_app_id: String::new(),
+            nullbr_api_key: String::new(),
+            cookie_check_enabled: true,
+            cookie_check_minutes: 360,
+            cookie_status: "unknown".into(),
+            cookie_checked_at: 0,
+            cookie_alerted: false,
+            tg_enabled: false,
+            tg_bot_token: String::new(),
+            tg_allowed_chats: String::new(),
         }
     }
 }
 impl Settings {
+    /// Parsed Telegram allowlist (ignores blanks / non-numeric entries).
+    pub fn tg_allowlist(&self) -> Vec<i64> {
+        self.tg_allowed_chats
+            .split([',', ' ', '\n'])
+            .filter_map(|v| v.trim().parse().ok())
+            .collect()
+    }
+    pub fn nullbr_ready(&self) -> bool {
+        self.nullbr_enabled && !self.nullbr_app_id.is_empty() && !self.nullbr_api_key.is_empty()
+    }
     pub fn public(&self) -> serde_json::Value {
-        serde_json::json!({"mode":self.mode,"re0_base_url":self.re0_base_url,"install_id":self.install_id,"default_target_cid":self.default_target_cid,"default_max_points":self.default_max_points,"checkin_enabled":self.checkin_enabled,"has_re0_secret":!self.re0_shared_secret.is_empty(),"has_tmdb_key":!self.tmdb_api_key.is_empty(),"has_115_cookie":!self.cookie_115.is_empty(),"last_checkin_day":self.last_checkin_day})
+        serde_json::json!({"mode":self.mode,"re0_base_url":self.re0_base_url,"install_id":self.install_id,"default_target_cid":self.default_target_cid,"default_max_points":self.default_max_points,"checkin_enabled":self.checkin_enabled,"has_re0_secret":!self.re0_shared_secret.is_empty(),"has_tmdb_key":!self.tmdb_api_key.is_empty(),"has_115_cookie":!self.cookie_115.is_empty(),"last_checkin_day":self.last_checkin_day,
+            "nullbr_enabled":self.nullbr_enabled,"nullbr_base_url":self.nullbr_base_url,"nullbr_app_id":self.nullbr_app_id,"has_nullbr_key":!self.nullbr_api_key.is_empty(),
+            "cookie_check_enabled":self.cookie_check_enabled,"cookie_check_minutes":self.cookie_check_minutes,"cookie_status":self.cookie_status,"cookie_checked_at":self.cookie_checked_at,
+            "tg_enabled":self.tg_enabled,"has_tg_token":!self.tg_bot_token.is_empty(),"tg_allowed_chats":self.tg_allowed_chats})
     }
 }
 
@@ -71,6 +118,13 @@ pub struct Resource {
     pub subtitle_type: serde_json::Value,
     #[serde(default)]
     pub remark: String,
+    /// Where this result came from: "relay" (RE0 relay; needs unlock) or "nullbr"
+    /// (NullBR fallback; `source_url` is already the 115 share link, so no unlock/points).
+    #[serde(default = "relay_origin")]
+    pub origin: String,
+}
+fn relay_origin() -> String {
+    "relay".into()
 }
 fn yes() -> bool {
     true

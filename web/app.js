@@ -218,6 +218,56 @@ async function loadSettings() {
   $("#cookie-state").textContent = s.has_115_cookie ? "已配置" : "未配置";
   $("#cookie-state").className =
     `pill ${s.has_115_cookie ? "success" : "neutral"}`;
+  const nb = $("#nullbr-state");
+  if (nb) {
+    nb.textContent = s.nullbr_enabled
+      ? s.has_nullbr_key && s.nullbr_app_id
+        ? "已启用"
+        : "缺密钥"
+      : "关闭";
+    nb.className = `pill ${s.nullbr_enabled && s.has_nullbr_key ? "success" : "neutral"}`;
+  }
+  const nh = $("#nullbr-hint");
+  if (nh)
+    nh.textContent = s.has_nullbr_key
+      ? "API Key 已保存，留空保留原值。"
+      : "资源接口需要 API Key。";
+  const cs = {
+    valid: ["有效", "success"],
+    expired: ["已失效", "warning"],
+    unknown: ["未知", "neutral"],
+  };
+  const [cl, ck] = cs[s.cookie_status] || cs.unknown;
+  const cls = $("#cookie-live-state");
+  if (cls) {
+    cls.textContent = cl;
+    cls.className = `pill ${ck}`;
+  }
+  const ch = $("#cookie-check-hint");
+  if (ch)
+    ch.textContent = s.cookie_checked_at
+      ? `上次探测 ${time(s.cookie_checked_at)}`
+      : "尚未探测";
+  const tg = $("#tg-state");
+  if (tg) {
+    tg.textContent = s.tg_enabled
+      ? s.has_tg_token
+        ? "已启用"
+        : "缺 Token"
+      : "关闭";
+    tg.className = `pill ${s.tg_enabled && s.has_tg_token ? "success" : "neutral"}`;
+  }
+  const th = $("#tg-hint");
+  if (th)
+    th.textContent = s.has_tg_token
+      ? "Token 已保存，留空保留原值。"
+      : "从 @BotFather 获取 Token。";
+  ["nullbr_api_key", "tg_bot_token"].forEach((n) => {
+    if (field(f, n)) field(f, n).value = "";
+  });
+  ["clear_nullbr_key", "clear_tg_token"].forEach((n) => {
+    if (field(f, n)) field(f, n).checked = false;
+  });
   mode(s);
 }
 async function refresh() {
@@ -342,6 +392,7 @@ function resourceCard(r, actions = true) {
               : "RE0",
       ),
       badge(panLabel(r), ok ? "light" : "neutral"),
+      r.origin === "nullbr" ? badge("NullBR", "success") : null,
     ),
     h(
       "div",
@@ -853,3 +904,6 @@ $("#token-revoke").addEventListener("click", (e) =>
     await loadToken();
   }),
 );
+
+const _ck=$("#cookie-check-now");
+if(_ck)_ck.addEventListener("click",(e)=>busy(e.currentTarget,async()=>{const r=await api("/api/accounts/115/cookie-status","POST");toast(r.status==="valid"?"Cookie 有效":r.status==="expired"?"Cookie 已失效":`状态：${r.status}`);await loadSettings();}));

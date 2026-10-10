@@ -14,6 +14,7 @@ pub struct Engine {
     pub providers: Providers,
     pub config_lock: Mutex<()>,
     pub qr: crate::qrlogin::QrSessions,
+    pub tg: crate::telegram::Telegram,
 }
 impl Engine {
     pub fn new(store: Store) -> Self {
@@ -25,6 +26,7 @@ impl Engine {
             providers,
             config_lock: Mutex::new(()),
             qr: Default::default(),
+            tg: Default::default(),
         }
     }
     /// Queue a transfer of a caller-selected version.
@@ -100,7 +102,20 @@ impl Engine {
         job.status = status.into();
         job.message = message.into();
         job.updated_at = now();
-        self.store.save_job(job).await
+        self.store.save_job(job).await?;
+        if matches!(status, "success" | "failed" | "skipped" | "needs_review") {
+            let chat = self.tg.chat_for_job(&job.id);
+            crate::telegram::notify_job(
+                self,
+                chat,
+                &job.id,
+                status,
+                &job.message,
+                &job.resource.title,
+            )
+            .await;
+        }
+        Ok(())
     }
     pub async fn execute_job(&self, mut job: Job) -> anyhow::Result<()> {
         let settings = self.store.settings().await?;
@@ -124,50 +139,60 @@ impl Engine {
                 .await?;
             return Ok(());
         }
-        self.update(&mut job, "checking", "检查资源积分和解锁状态")
-            .await?;
-        let detail = match self.providers.detail(&settings, &job.resource.slug).await {
-            Ok(v) => v,
-            Err(e) => {
-                self.update(&mut job, "failed", e.message).await?;
+        let link = if job.resource.origin == "nullbr" {
+            // NullBR already handed us the 115 share link; never call the RE0 unlock endpoint.
+            if job.resource.source_url.is_empty() {
+                self.update(&mut job, "failed", "NullBR 资源缺少分享链接").await?;
                 return Ok(());
             }
-        };
-        let data = detail.get("data").unwrap_or(&detail);
-        // Never spend points on a version that cannot land in 115.
-        let pan = crate::providers::text(data, &["pan_type", "website", "provider"]);
-        if !pan.is_empty() && !pan.contains("115") {
-            self.update(&mut job, "skipped", format!("资源网盘类型为 {pan}，不能转存到 115，未解锁"))
+            self.update(&mut job, "transferring", "NullBR 直链，跳过解锁").await?;
+            job.resource.source_url.clone()
+        } else {
+            self.update(&mut job, "checking", "检查资源积分和解锁状态")
                 .await?;
-            return Ok(());
-        }
-        if !owned(data) {
-            match points(data) {
-                None => {
-                    self.update(&mut job, "skipped", "积分未知，已跳过解锁")
-                        .await?;
+            let detail = match self.providers.detail(&settings, &job.resource.slug).await {
+                Ok(v) => v,
+                Err(e) => {
+                    self.update(&mut job, "failed", e.message).await?;
                     return Ok(());
                 }
-                Some(cost) if cost < 0 || cost > job.max_points => {
-                    let cap = job.max_points;
-                    self.update(
-                        &mut job,
-                        "skipped",
-                        format!("需要 {cost} 积分，超过上限 {cap}"),
-                    )
+            };
+            let data = detail.get("data").unwrap_or(&detail);
+            // Never spend points on a version that cannot land in 115.
+            let pan = crate::providers::text(data, &["pan_type", "website", "provider"]);
+            if !pan.is_empty() && !pan.contains("115") {
+                self.update(&mut job, "skipped", format!("资源网盘类型为 {pan}，不能转存到 115，未解锁"))
                     .await?;
+                return Ok(());
+            }
+            if !owned(data) {
+                match points(data) {
+                    None => {
+                        self.update(&mut job, "skipped", "积分未知，已跳过解锁")
+                            .await?;
+                        return Ok(());
+                    }
+                    Some(cost) if cost < 0 || cost > job.max_points => {
+                        let cap = job.max_points;
+                        self.update(
+                            &mut job,
+                            "skipped",
+                            format!("需要 {cost} 积分，超过上限 {cap}"),
+                        )
+                        .await?;
+                        return Ok(());
+                    }
+                    _ => {}
+                }
+            }
+            self.update(&mut job, "unlocking", "正在取得分享链接")
+                .await?;
+            match self.providers.unlock(&settings, &job.resource.slug).await {
+                Ok(link) => link,
+                Err(e) => {
+                    self.update(&mut job, "needs_review", e.message).await?;
                     return Ok(());
                 }
-                _ => {}
-            }
-        }
-        self.update(&mut job, "unlocking", "正在取得分享链接")
-            .await?;
-        let link = match self.providers.unlock(&settings, &job.resource.slug).await {
-            Ok(link) => link,
-            Err(e) => {
-                self.update(&mut job, "needs_review", e.message).await?;
-                return Ok(());
             }
         };
         self.update(&mut job, "transferring", "正在向 115 接收分享")
@@ -303,6 +328,9 @@ impl Engine {
                 if let Err(e) = self.scan(rule).await {
                     tracing::error!(error=%e,"subscription scan failed");
                 }
+            }
+            if let Err(e) = self.cookie_keepalive().await {
+                tracing::warn!(error=%e, "cookie keep-alive failed");
             }
             let s = self.store.settings().await?;
             let day = chrono::Local::now().format("%Y-%m-%d").to_string();

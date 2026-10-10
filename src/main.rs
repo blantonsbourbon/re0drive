@@ -26,11 +26,13 @@ async fn main() -> anyhow::Result<()> {
     let stop = tokio::sync::watch::channel(false);
     let (worker_done_tx, worker_done_rx) = tokio::sync::oneshot::channel();
     let worker_engine = engine.clone();
+    let worker_rx = stop.1.clone();
     let worker = tokio::spawn(async move {
-        let result = worker_engine.run(stop.1).await;
+        let result = worker_engine.run(worker_rx).await;
         let _ = worker_done_tx.send(());
         result
     });
+    re0drive::telegram::spawn(engine.clone(), stop.1.clone());
     let addr = std::env::var("RE0DRIVE_BIND").unwrap_or_else(|_| "127.0.0.1:8787".into());
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!(%addr, "RE0Drive ready");

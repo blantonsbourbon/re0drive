@@ -263,6 +263,7 @@ impl Providers {
                 }
             }
         }
+        let resolved_ids = ids.clone();
         let mut tasks = tokio::task::JoinSet::new();
         for id in ids {
             let p = self.clone();
@@ -286,6 +287,21 @@ impl Providers {
             for item in res.map_err(|_| AppError::upstream("资源查询任务失败"))?? {
                 if seen.insert(item.slug.clone()) {
                     result.push(item);
+                }
+            }
+        }
+        if result.is_empty() {
+            // Relay returned nothing. Fall back to NullBR when configured; still an explicit
+            // empty list when NullBR has nothing either (never substitute demo data).
+            let id = if resolved_ids.len() == 1 { Some(resolved_ids[0].clone()) } else { None };
+            if let Some(tmdb) = id {
+                match crate::nullbr::search_115(&self.http, s, &tmdb, media_type).await {
+                    Ok(extra) if !extra.is_empty() => {
+                        tracing::info!(count = extra.len(), tmdb = %tmdb, "nullbr fallback");
+                        result = extra;
+                    }
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!(error = %e.message, "nullbr fallback failed"),
                 }
             }
         }
@@ -735,6 +751,7 @@ pub fn normalize_resources(v: &Value) -> Vec<Resource> {
                 subtitle_language: raw(v, &["subtitle_language", "subtitle_languages"]),
                 subtitle_type: raw(v, &["subtitle_type", "subtitle_types"]),
                 remark: text(v, &["remark", "note", "description"]),
+                origin: "relay".into(),
             });
             return;
         }
@@ -780,8 +797,11 @@ fn check_success(v: &Value, label: &str) -> Result<()> {
         || v.get("state").and_then(Value::as_bool) == Some(true);
     if failed || (!explicit_success && !code.is_empty() && code != "200" && code != "0") {
         let code = if code.len() < 50 { code } else { String::new() };
+        let detail = text(v, &["error", "message", "msg", "errno"]);
         return Err(AppError::upstream(format!(
-            "{label} 操作未成功（{code}），请检查授权、积分或账号状态"
+            "{label} 操作未成功（{code}{}{}），请检查授权、积分或账号状态",
+            if detail.is_empty() { "" } else { " · " },
+            detail
         )));
     }
     Ok(())
@@ -820,6 +840,7 @@ pub fn demo_resources(query: &str, media_type: &str) -> Vec<Resource> {
         subtitle_language: json!(["简体中文", "English"]),
         subtitle_type: json!(["内嵌"]),
         remark: remark.into(),
+        origin: "relay".into(),
     })
     .collect()
 }

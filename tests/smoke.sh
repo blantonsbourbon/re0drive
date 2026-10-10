@@ -15,7 +15,7 @@ python3 tests/mock_upstream.py "$MP" mock-test-key >"$TMP/mock.log" 2>&1 & MOCK_
 env HTTP_PROXY=http://127.0.0.1:9 HTTPS_PROXY=http://127.0.0.1:9 ALL_PROXY=http://127.0.0.1:9 NO_PROXY=127.0.0.1,localhost \
   http_proxy=http://127.0.0.1:9 https_proxy=http://127.0.0.1:9 all_proxy=http://127.0.0.1:9 no_proxy=127.0.0.1,localhost \
   RE0DRIVE_DATA="$DATA" RE0DRIVE_BIND=127.0.0.1:$SP RE0_GATEWAY_URL="$MOCK" \
-  RE0DRIVE_115_BASE_URL="$MOCK" RE0DRIVE_TMDB_BASE_URL="$MOCK" RE0DRIVE_115_QR_BASE_URL="$MOCK" "$BIN" >"$TMP/server.log" 2>&1 & SRV_PID=$!
+  RE0DRIVE_115_BASE_URL="$MOCK" RE0DRIVE_TMDB_BASE_URL="$MOCK" RE0DRIVE_115_QR_BASE_URL="$MOCK" RE0DRIVE_TG_BASE_URL="$MOCK" "$BIN" >"$TMP/server.log" 2>&1 & SRV_PID=$!
 trap 'kill $SRV_PID $MOCK_PID 2>/dev/null; wait 2>/dev/null; rm -rf "$TMP"' EXIT
 for _ in $(seq 1 50); do curl -sf $BASE/health >/dev/null && curl -s $MOCK/_calls >/dev/null && break; sleep 0.2; done
 JAR=$(mktemp); PASS=0; FAILN=0
@@ -98,6 +98,12 @@ ok "token cannot read settings" '[ $(b -o /dev/null -w %{http_code} $BASE/api/se
 ok "wrong token rejected" '[ $(curl -s -o /dev/null -w %{http_code} -H "Authorization: Bearer r0d_$(printf 0%.0s {1..64})" $BASE/api/jobs) = 401 ]'
 OLD=$TOK; TOK=$(c -X POST $BASE/api/machine-token | j 'd["token"]')
 ok "rotation invalidates old token" '[ $(curl -s -o /dev/null -w %{http_code} -H "Authorization: Bearer $OLD" $BASE/api/jobs) = 401 ] && [ $(b -o /dev/null -w %{http_code} $BASE/api/jobs) = 200 ]'
+
+# NullBR + cookie keep-alive (settings secrets never echoed)
+ok "save nullbr+cookie settings" 'c -X PUT -d "{\"mode\":\"gateway\",\"re0_base_url\":\"$MOCK\",\"install_id\":\"inst_smoke\",\"default_target_cid\":\"123\",\"default_max_points\":4,\"checkin_enabled\":false,\"nullbr_enabled\":true,\"nullbr_base_url\":\"$MOCK\",\"nullbr_app_id\":\"smoke-app\",\"nullbr_api_key\":\"smoke-key\",\"cookie_check_enabled\":true,\"cookie_check_minutes\":5,\"tg_enabled\":false,\"tg_allowed_chats\":\"\"}" $BASE/api/settings | chk "d[\"nullbr_enabled\"] and d[\"has_nullbr_key\"] and \"nullbr_api_key\" not in d"'
+ok "nullbr/tg secrets not echoed" '! c $BASE/api/settings | grep -q smoke-key && ! grep -a -q smoke-key $DATA/re0drive.db*'
+ok "nullbr empty stays empty" 'c -X POST -d "{\"tmdb_id\":999,\"media_type\":\"movie\"}" $BASE/api/resources/search | chk "d[\"resources\"]==[]"'
+ok "cookie probe valid" 'c -X POST $BASE/api/accounts/115/cookie-status | chk "d[\"status\"]==\"valid\""'
 
 # 115 QR login: waiting -> scanned -> confirmed, cookie replaced and kept write-only
 ok "115 qr apps list" 'c $BASE/api/login/115/apps | grep -q alipaymini'

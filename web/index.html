@@ -365,6 +365,97 @@
                       ></label
                     >
                   </section>
+                  <section class="panel settings-panel">
+                    <div class="panel-heading">
+                      <h2><span class="section-icon">NB</span> NullBR 回退</h2>
+                      <span id="nullbr-state" class="pill neutral">关闭</span>
+                    </div>
+                    <p class="helper-text">
+                      当 RE0 中转返回空结果时，用 <a href="https://nullbr.readthedocs.io/" target="_blank" rel="noopener">NullBR 公开 API</a>
+                      按 TMDB ID 查询 115 分享。需自行注册获取 App ID / API Key；密钥加密保存、不会回显。
+                    </p>
+                    <label class="checkbox-label"
+                      ><input name="nullbr_enabled" type="checkbox" /><span
+                        >启用 NullBR 回退<small>仅在中转为空时触发；两边都空则返回空列表。</small></span
+                      ></label
+                    >
+                    <div class="form-grid">
+                      <label class="full"
+                        >服务地址<input name="nullbr_base_url" type="url" placeholder="https://api.nullbr.eu.org" /></label
+                      ><label
+                        >App ID<input name="nullbr_app_id" autocomplete="off" placeholder="你的 NullBR App ID" /></label
+                      ><label
+                        >API Key<input
+                          name="nullbr_api_key"
+                          type="password"
+                          autocomplete="new-password"
+                          placeholder="留空保留原值"
+                        /><small id="nullbr-hint">保存后不会返回到浏览器。</small
+                        ><span class="credential-clear"
+                          ><input name="clear_nullbr_key" type="checkbox" aria-label="清除 NullBR Key" />清除已保存的 Key</span
+                        ></label
+                      >
+                    </div>
+                  </section>
+                  <section class="panel settings-panel">
+                    <div class="panel-heading">
+                      <h2><span class="section-icon">CK</span> 115 Cookie 保活</h2>
+                      <span id="cookie-live-state" class="pill neutral">未知</span>
+                    </div>
+                    <p class="helper-text">
+                      定期用只读接口探测 Cookie 是否仍有效。失效时写入活动日志，并（若启用）通过 Telegram 告警；
+                      请到上方扫码重新登录。Cookie 始终加密存储、不会回显。
+                    </p>
+                    <label class="checkbox-label"
+                      ><input name="cookie_check_enabled" type="checkbox" /><span>启用定期探测</span></label
+                    >
+                    <div class="form-grid">
+                      <label
+                        >探测间隔（分钟）<input
+                          name="cookie_check_minutes"
+                          type="number"
+                          min="5"
+                          max="1440"
+                          value="360"
+                      /></label>
+                    </div>
+                    <div class="button-row">
+                      <button class="button secondary" type="button" id="cookie-check-now">立即检查</button>
+                      <span class="helper-text" id="cookie-check-hint"></span>
+                    </div>
+                  </section>
+                  <section class="panel settings-panel">
+                    <div class="panel-heading">
+                      <h2><span class="section-icon">TG</span> Telegram 机器人</h2>
+                      <span id="tg-state" class="pill neutral">关闭</span>
+                    </div>
+                    <p class="helper-text">
+                      长轮询（无需公网 Webhook）。在 @BotFather 创建机器人后填入 Token，并把允许操作的
+                      chat / user id（逗号分隔）加入白名单。未在白名单内的用户会被拒绝。
+                    </p>
+                    <label class="checkbox-label"
+                      ><input name="tg_enabled" type="checkbox" /><span>启用机器人</span></label
+                    >
+                    <div class="form-grid">
+                      <label class="full"
+                        >Bot Token<input
+                          name="tg_bot_token"
+                          type="password"
+                          autocomplete="new-password"
+                          placeholder="留空保留原值"
+                        /><small id="tg-hint">保存后不会返回到浏览器。</small
+                        ><span class="credential-clear"
+                          ><input name="clear_tg_token" type="checkbox" aria-label="清除 Bot Token" />清除已保存的 Token</span
+                        ></label
+                      ><label class="full"
+                        >允许的 Chat / User ID<input
+                          name="tg_allowed_chats"
+                          placeholder="例如 123456789, -1009876543210"
+                          autocomplete="off"
+                        /><small>向机器人发任意消息，从 @userinfobot 或日志中获取 id。</small></label
+                      >
+                    </div>
+                  </section>
                   <section class="panel settings-panel" id="machine-token-panel">
                     <div class="panel-heading">
                       <h2><span class="section-icon">API</span> 机器令牌</h2>
