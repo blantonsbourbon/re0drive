@@ -384,16 +384,6 @@ struct SettingsUpdate {
     #[serde(default)]
     clear_115_cookie: bool,
     #[serde(default)]
-    nullbr_enabled: bool,
-    #[serde(default)]
-    nullbr_base_url: String,
-    #[serde(default)]
-    nullbr_app_id: String,
-    #[serde(default)]
-    nullbr_api_key: String,
-    #[serde(default)]
-    clear_nullbr_key: bool,
-    #[serde(default)]
     cookie_check_enabled: bool,
     #[serde(default = "default_cookie_mins")]
     cookie_check_minutes: u32,
@@ -432,20 +422,10 @@ async fn save_settings(
         || v.install_id.contains(['\r', '\n'])
         || v.cookie_115.contains(['\r', '\n'])
         || !(5..=1440).contains(&v.cookie_check_minutes)
-        || v.nullbr_base_url.len() > 300
-        || v.nullbr_app_id.len() > 200
         || v.tg_allowed_chats.len() > 500
         || v.tg_bot_token.contains(['\r', '\n'])
-        || v.nullbr_api_key.contains(['\r', '\n'])
     {
         return Err(AppError::bad("目录、积分上限或账号配置无效"));
-    }
-    let nullbr_base = v.nullbr_base_url.trim().trim_end_matches('/');
-    if !nullbr_base.is_empty() {
-        let u = url::Url::parse(nullbr_base).map_err(|_| AppError::bad("NullBR 地址无效"))?;
-        if !matches!(u.scheme(), "https" | "http") || u.host_str().is_none() {
-            return Err(AppError::bad("NullBR 地址无效"));
-        }
     }
     let _guard = app.config_lock.lock().await;
     let mut s = app.store.settings().await?;
@@ -461,11 +441,6 @@ async fn save_settings(
     s.default_target_cid = v.default_target_cid;
     s.default_max_points = v.default_max_points;
     s.checkin_enabled = v.checkin_enabled;
-    s.nullbr_enabled = v.nullbr_enabled;
-    if !nullbr_base.is_empty() {
-        s.nullbr_base_url = nullbr_base.into();
-    }
-    s.nullbr_app_id = v.nullbr_app_id.trim().into();
     s.cookie_check_enabled = v.cookie_check_enabled;
     s.cookie_check_minutes = v.cookie_check_minutes;
     s.tg_enabled = v.tg_enabled;
@@ -487,7 +462,6 @@ async fn save_settings(
         ),
         (&mut s.tmdb_api_key, v.tmdb_api_key, v.clear_tmdb_key),
         (&mut s.cookie_115, v.cookie_115, v.clear_115_cookie),
-        (&mut s.nullbr_api_key, v.nullbr_api_key, v.clear_nullbr_key),
         (&mut s.tg_bot_token, v.tg_bot_token, v.clear_tg_token),
     ] {
         if clear {

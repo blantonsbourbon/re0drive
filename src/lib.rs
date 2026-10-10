@@ -2,7 +2,6 @@ pub mod cookie;
 pub mod engine;
 pub mod error;
 pub mod models;
-pub mod nullbr;
 pub mod providers;
 pub mod qrlogin;
 pub mod store;

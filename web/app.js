@@ -218,20 +218,6 @@ async function loadSettings() {
   $("#cookie-state").textContent = s.has_115_cookie ? "已配置" : "未配置";
   $("#cookie-state").className =
     `pill ${s.has_115_cookie ? "success" : "neutral"}`;
-  const nb = $("#nullbr-state");
-  if (nb) {
-    nb.textContent = s.nullbr_enabled
-      ? s.has_nullbr_key && s.nullbr_app_id
-        ? "已启用"
-        : "缺密钥"
-      : "关闭";
-    nb.className = `pill ${s.nullbr_enabled && s.has_nullbr_key ? "success" : "neutral"}`;
-  }
-  const nh = $("#nullbr-hint");
-  if (nh)
-    nh.textContent = s.has_nullbr_key
-      ? "API Key 已保存，留空保留原值。"
-      : "资源接口需要 API Key。";
   const cs = {
     valid: ["有效", "success"],
     expired: ["已失效", "warning"],
@@ -262,10 +248,10 @@ async function loadSettings() {
     th.textContent = s.has_tg_token
       ? "Token 已保存，留空保留原值。"
       : "从 @BotFather 获取 Token。";
-  ["nullbr_api_key", "tg_bot_token"].forEach((n) => {
+  ["tg_bot_token"].forEach((n) => {
     if (field(f, n)) field(f, n).value = "";
   });
-  ["clear_nullbr_key", "clear_tg_token"].forEach((n) => {
+  ["clear_tg_token"].forEach((n) => {
     if (field(f, n)) field(f, n).checked = false;
   });
   mode(s);
@@ -392,7 +378,6 @@ function resourceCard(r, actions = true) {
               : "RE0",
       ),
       badge(panLabel(r), ok ? "light" : "neutral"),
-      r.origin === "nullbr" ? badge("NullBR", "success") : null,
     ),
     h(
       "div",

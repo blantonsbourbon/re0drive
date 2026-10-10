@@ -99,10 +99,10 @@ ok "wrong token rejected" '[ $(curl -s -o /dev/null -w %{http_code} -H "Authoriz
 OLD=$TOK; TOK=$(c -X POST $BASE/api/machine-token | j 'd["token"]')
 ok "rotation invalidates old token" '[ $(curl -s -o /dev/null -w %{http_code} -H "Authorization: Bearer $OLD" $BASE/api/jobs) = 401 ] && [ $(b -o /dev/null -w %{http_code} $BASE/api/jobs) = 200 ]'
 
-# NullBR + cookie keep-alive (settings secrets never echoed)
-ok "save nullbr+cookie settings" 'c -X PUT -d "{\"mode\":\"gateway\",\"re0_base_url\":\"$MOCK\",\"install_id\":\"inst_smoke\",\"default_target_cid\":\"123\",\"default_max_points\":4,\"checkin_enabled\":false,\"nullbr_enabled\":true,\"nullbr_base_url\":\"$MOCK\",\"nullbr_app_id\":\"smoke-app\",\"nullbr_api_key\":\"smoke-key\",\"cookie_check_enabled\":true,\"cookie_check_minutes\":5,\"tg_enabled\":false,\"tg_allowed_chats\":\"\"}" $BASE/api/settings | chk "d[\"nullbr_enabled\"] and d[\"has_nullbr_key\"] and \"nullbr_api_key\" not in d"'
-ok "nullbr/tg secrets not echoed" '! c $BASE/api/settings | grep -q smoke-key && ! grep -a -q smoke-key $DATA/re0drive.db*'
-ok "nullbr empty stays empty" 'c -X POST -d "{\"tmdb_id\":999,\"media_type\":\"movie\"}" $BASE/api/resources/search | chk "d[\"resources\"]==[]"'
+# Cookie keep-alive + tg secrets stay write-only
+ok "save cookie+tg settings" 'c -X PUT -d "{\"mode\":\"gateway\",\"re0_base_url\":\"$MOCK\",\"install_id\":\"inst_smoke\",\"default_target_cid\":\"123\",\"default_max_points\":4,\"checkin_enabled\":false,\"cookie_check_enabled\":true,\"cookie_check_minutes\":5,\"tg_enabled\":false,\"tg_bot_token\":\"123:smoke-token\",\"tg_allowed_chats\":\"42\"}" $BASE/api/settings | chk "d[\"cookie_check_enabled\"] and d[\"has_tg_token\"] and \"tg_bot_token\" not in d and \"nullbr_enabled\" not in d"'
+ok "tg secrets not echoed" '! c $BASE/api/settings | grep -q smoke-token && ! grep -a -q smoke-token $DATA/re0drive.db*'
+ok "empty relay stays empty" 'c -X POST -d "{\"tmdb_id\":999,\"media_type\":\"movie\"}" $BASE/api/resources/search | chk "d[\"resources\"]==[]"'
 ok "cookie probe valid" 'c -X POST $BASE/api/accounts/115/cookie-status | chk "d[\"status\"]==\"valid\""'
 
 # 115 QR login: waiting -> scanned -> confirmed, cookie replaced and kept write-only

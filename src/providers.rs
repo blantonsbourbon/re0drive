@@ -263,7 +263,6 @@ impl Providers {
                 }
             }
         }
-        let resolved_ids = ids.clone();
         let mut tasks = tokio::task::JoinSet::new();
         for id in ids {
             let p = self.clone();
@@ -290,21 +289,7 @@ impl Providers {
                 }
             }
         }
-        if result.is_empty() {
-            // Relay returned nothing. Fall back to NullBR when configured; still an explicit
-            // empty list when NullBR has nothing either (never substitute demo data).
-            let id = if resolved_ids.len() == 1 { Some(resolved_ids[0].clone()) } else { None };
-            if let Some(tmdb) = id {
-                match crate::nullbr::search_115(&self.http, s, &tmdb, media_type).await {
-                    Ok(extra) if !extra.is_empty() => {
-                        tracing::info!(count = extra.len(), tmdb = %tmdb, "nullbr fallback");
-                        result = extra;
-                    }
-                    Ok(_) => {}
-                    Err(e) => tracing::warn!(error = %e.message, "nullbr fallback failed"),
-                }
-            }
-        }
+        // Empty relay result stays an explicit empty list (never substitute demo / third-party data).
         result.sort_by_key(|r| {
             (
                 !r.selectable,

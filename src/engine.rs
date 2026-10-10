@@ -139,60 +139,56 @@ impl Engine {
                 .await?;
             return Ok(());
         }
-        let link = if job.resource.origin == "nullbr" {
-            // NullBR already handed us the 115 share link; never call the RE0 unlock endpoint.
-            if job.resource.source_url.is_empty() {
-                self.update(&mut job, "failed", "NullBR 资源缺少分享链接").await?;
-                return Ok(());
-            }
-            self.update(&mut job, "transferring", "NullBR 直链，跳过解锁").await?;
-            job.resource.source_url.clone()
-        } else {
-            self.update(&mut job, "checking", "检查资源积分和解锁状态")
+        if job.resource.origin == "nullbr" {
+            // Feature removed: do not unlock or receive leftover NullBR-queued jobs.
+            self.update(&mut job, "skipped", "NullBR 回退已移除，请重新搜索后转存")
                 .await?;
-            let detail = match self.providers.detail(&settings, &job.resource.slug).await {
-                Ok(v) => v,
-                Err(e) => {
-                    self.update(&mut job, "failed", e.message).await?;
-                    return Ok(());
-                }
-            };
-            let data = detail.get("data").unwrap_or(&detail);
-            // Never spend points on a version that cannot land in 115.
-            let pan = crate::providers::text(data, &["pan_type", "website", "provider"]);
-            if !pan.is_empty() && !pan.contains("115") {
-                self.update(&mut job, "skipped", format!("资源网盘类型为 {pan}，不能转存到 115，未解锁"))
-                    .await?;
+            return Ok(());
+        }
+        self.update(&mut job, "checking", "检查资源积分和解锁状态")
+            .await?;
+        let detail = match self.providers.detail(&settings, &job.resource.slug).await {
+            Ok(v) => v,
+            Err(e) => {
+                self.update(&mut job, "failed", e.message).await?;
                 return Ok(());
             }
-            if !owned(data) {
-                match points(data) {
-                    None => {
-                        self.update(&mut job, "skipped", "积分未知，已跳过解锁")
-                            .await?;
-                        return Ok(());
-                    }
-                    Some(cost) if cost < 0 || cost > job.max_points => {
-                        let cap = job.max_points;
-                        self.update(
-                            &mut job,
-                            "skipped",
-                            format!("需要 {cost} 积分，超过上限 {cap}"),
-                        )
+        };
+        let data = detail.get("data").unwrap_or(&detail);
+        // Never spend points on a version that cannot land in 115.
+        let pan = crate::providers::text(data, &["pan_type", "website", "provider"]);
+        if !pan.is_empty() && !pan.contains("115") {
+            self.update(&mut job, "skipped", format!("资源网盘类型为 {pan}，不能转存到 115，未解锁"))
+                .await?;
+            return Ok(());
+        }
+        if !owned(data) {
+            match points(data) {
+                None => {
+                    self.update(&mut job, "skipped", "积分未知，已跳过解锁")
                         .await?;
-                        return Ok(());
-                    }
-                    _ => {}
-                }
-            }
-            self.update(&mut job, "unlocking", "正在取得分享链接")
-                .await?;
-            match self.providers.unlock(&settings, &job.resource.slug).await {
-                Ok(link) => link,
-                Err(e) => {
-                    self.update(&mut job, "needs_review", e.message).await?;
                     return Ok(());
                 }
+                Some(cost) if cost < 0 || cost > job.max_points => {
+                    let cap = job.max_points;
+                    self.update(
+                        &mut job,
+                        "skipped",
+                        format!("需要 {cost} 积分，超过上限 {cap}"),
+                    )
+                    .await?;
+                    return Ok(());
+                }
+                _ => {}
+            }
+        }
+        self.update(&mut job, "unlocking", "正在取得分享链接")
+            .await?;
+        let link = match self.providers.unlock(&settings, &job.resource.slug).await {
+            Ok(link) => link,
+            Err(e) => {
+                self.update(&mut job, "needs_review", e.message).await?;
+                return Ok(());
             }
         };
         self.update(&mut job, "transferring", "正在向 115 接收分享")

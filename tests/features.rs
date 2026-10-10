@@ -1,5 +1,5 @@
-//! NullBR fallback, 115 Cookie keep-alive, Telegram bot — all against in-process mocks.
-//! Nothing reaches api.nullbr.eu.org, api.telegram.org, or real 115.
+//! 115 Cookie keep-alive + Telegram bot — in-process mocks only.
+//! Nothing reaches api.telegram.org or real 115.
 use axum::{
     Router,
     body::{Body, to_bytes},
@@ -109,53 +109,19 @@ async fn fixture(State(c): State<Arc<Calls>>, req: Request) -> Response {
         return j(json!({"ok": false, "description": "unknown tg method"}));
     }
 
-    // --- NullBR ---
-    if path.starts_with("/movie/") || path.starts_with("/tv/") {
-        assert_eq!(
-            headers.get("x-app-id").and_then(|v| v.to_str().ok()),
-            Some("test-app")
-        );
-        assert_eq!(
-            headers.get("x-api-key").and_then(|v| v.to_str().ok()),
-            Some("test-key")
-        );
-        assert!(
-            headers
-                .get("user-agent")
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("")
-                .starts_with("re0drive/")
-        );
-        c.push(format!("NULLBR {path}?page={}", q.get("page").cloned().unwrap_or_default()));
-        if path.ends_with("/999/115") {
-            return j(json!({"id":999,"media_type":"movie","page":1,"total_page":1,"items":[]}));
-        }
-        if path.ends_with("/550/115") {
-            let page: u32 = q.get("page").and_then(|p| p.parse().ok()).unwrap_or(1);
-            if page == 1 {
-                return j(json!({
-                    "id":550,"media_type":"movie","page":1,"total_page":2,
-                    "items":[
-                        {"title":"NB 2160p","size":"40 GB","share_link":"https://115.com/s/swnullbr1?password=ab12","resolution":"2160P","quality":["REMUX"]},
-                        {"title":"NB quark","size":"1 GB","share_link":"https://pan.quark.cn/s/abc","resolution":"1080P"}
-                    ]
-                }));
-            }
-            return j(json!({
-                "id":550,"media_type":"movie","page":2,"total_page":2,
-                "items":[
-                    {"title":"NB page2","size":"9 GB","share_link":"https://115.com/s/swnullbr2?password=cd34","resolution":"1080P","quality":"WEB-DL"}
-                ]
-            }));
-        }
-        return j(json!({"id":0,"page":1,"total_page":1,"items":[]}));
-    }
 
     // --- RE0 relay (HMAC not required here — we only care about empty fallback) ---
     if path.starts_with("/api/resources/") && method == Method::GET {
         c.push(format!("RELAY {path}"));
-        // Always empty so NullBR kicks in.
-        return j(json!({"success":true,"data":[],"total":0}));
+        if path.ends_with("/999") {
+            return j(json!({"success":true,"data":[],"total":0}));
+        }
+        return j(json!({"success":true,"data":{"115":[{
+            "slug":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","title":"Fixture 2160p",
+            "unlock_points":0,"is_unlocked":true,"pan_type":"115",
+            "share_size":"40 GB","video_resolution":["2160P"],"source":["REMUX"],
+            "subtitle_language":["简中"],"subtitle_type":["内封"],"remark":"fixture"
+        }]},"total":1}));
     }
     if path == "/api/resources/unlock" {
         c.unlocks.fetch_add(1, Ordering::SeqCst);
@@ -203,10 +169,6 @@ async fn harness(cookie_ok: bool) -> (Temp, Server, Arc<Engine>, Arc<Calls>) {
     s.install_id = "fixture".into();
     s.re0_shared_secret = "fixture-key".into();
     s.cookie_115 = "UID=test; CID=test; SEID=test".into();
-    s.nullbr_enabled = true;
-    s.nullbr_base_url = srv.base.clone();
-    s.nullbr_app_id = "test-app".into();
-    s.nullbr_api_key = "test-key".into();
     s.cookie_check_enabled = true;
     s.cookie_check_minutes = 5;
     s.tg_enabled = true;
@@ -220,55 +182,7 @@ async fn harness(cookie_ok: bool) -> (Temp, Server, Arc<Engine>, Arc<Calls>) {
     (dir, srv, Arc::new(engine), calls)
 }
 
-#[tokio::test]
-async fn nullbr_fallback_when_relay_empty() {
-    let (_d, _s, e, c) = harness(true).await;
-    let s = e.store.settings().await.unwrap();
-    let r = e
-        .providers
-        .search_with(&s, "", Some("550"), "movie")
-        .await
-        .unwrap();
-    assert!(c.all().iter().any(|x| x.starts_with("RELAY /api/resources/movie/550")));
-    assert!(c.all().iter().any(|x| x.contains("NULLBR /movie/550/115?page=1")));
-    assert!(c.all().iter().any(|x| x.contains("NULLBR /movie/550/115?page=2")), "paginates");
-    assert_eq!(r.len(), 3);
-    assert!(r.iter().filter(|x| x.selectable).count() == 2);
-    assert!(r.iter().any(|x| !x.selectable && x.source_url.contains("quark")));
-    assert!(r.iter().all(|x| x.origin == "nullbr"));
-    // Both empty → explicit empty list
-    let empty = e
-        .providers
-        .search_with(&s, "", Some("999"), "movie")
-        .await
-        .unwrap();
-    assert!(empty.is_empty());
-}
 
-#[tokio::test]
-async fn nullbr_transfer_skips_unlock() {
-    let (_d, _s, e, c) = harness(true).await;
-    let s = e.store.settings().await.unwrap();
-    let r = e
-        .providers
-        .search_with(&s, "", Some("550"), "movie")
-        .await
-        .unwrap()
-        .into_iter()
-        .find(|x| x.selectable)
-        .unwrap();
-    let job = e
-        .enqueue_opt(r, Some("0".into()), Some(0), None)
-        .await
-        .unwrap()
-        .unwrap();
-    e.execute_job(job).await.unwrap();
-    assert_eq!(c.unlocks.load(Ordering::SeqCst), 0, "must not call RE0 unlock");
-    assert!(c.all().iter().any(|x| x == "RECEIVE"));
-    let jobs = e.store.jobs().await.unwrap();
-    assert_eq!(jobs[0].status, "success");
-    assert!(!jobs[0].received.is_empty());
-}
 
 #[tokio::test]
 async fn cookie_keepalive_detects_expiry_and_alerts_once() {
@@ -326,7 +240,7 @@ async fn telegram_allowlist_search_and_transfer() {
         .iter()
         .find(|m| m["chat_id"] == 42 && m["reply_markup"].is_object())
         .expect("results with keyboard");
-    assert!(result_msg["text"].as_str().unwrap().contains("NullBR") || result_msg["text"].as_str().unwrap().contains("版本"));
+    assert!(result_msg["text"].as_str().unwrap().contains("版本"));
     let kb = result_msg["reply_markup"]["inline_keyboard"].as_array().unwrap();
     let xfer = kb
         .iter()
@@ -350,9 +264,9 @@ async fn telegram_allowlist_search_and_transfer() {
     }));
     e.tg.poll_once(&e).await.unwrap();
     let job = e.store.pending_job().await.unwrap().expect("job queued");
-    assert_eq!(job.resource.origin, "nullbr");
+    assert_eq!(job.resource.origin, "relay");
     e.execute_job(job).await.unwrap();
-    assert_eq!(c.unlocks.load(Ordering::SeqCst), 0);
+    assert_eq!(c.unlocks.load(Ordering::SeqCst), 1); // owned relay resource still fetches the share link
     // Job notification went out
     let sent = c.tg_sent.lock().unwrap().clone();
     assert!(sent.iter().any(|m| {
@@ -369,10 +283,39 @@ async fn secrets_never_echoed_in_public_settings() {
     let (_d, _s, e, _c) = harness(true).await;
     let pub_ = e.store.settings().await.unwrap().public();
     let text = pub_.to_string();
-    assert!(!text.contains("test-key"));
     assert!(!text.contains("123:ABC"));
     assert!(!text.contains("UID=test"));
-    assert_eq!(pub_["has_nullbr_key"], true);
     assert_eq!(pub_["has_tg_token"], true);
-    assert_eq!(pub_["nullbr_app_id"], "test-app"); // app id is not secret
+    assert!(!pub_.as_object().unwrap().contains_key("nullbr_enabled"));
+    assert!(!pub_.as_object().unwrap().contains_key("has_nullbr_key"));
+}
+
+#[tokio::test]
+async fn empty_relay_stays_empty() {
+    let (_d, _s, e, c) = harness(true).await;
+    let settings = e.store.settings().await.unwrap();
+    let r = e.providers.search_with(&settings, "", Some("999"), "movie").await.unwrap();
+    assert!(r.is_empty());
+    assert!(c.all().iter().any(|x| x.contains("RELAY") && x.contains("999")));
+    assert!(!c.all().iter().any(|x| x.contains("NULLBR") || x.contains("/movie/999/115")));
+}
+
+#[tokio::test]
+async fn leftover_nullbr_settings_ignored_on_load() {
+    // Simulate an older encrypted doc that still carries nullbr_* keys.
+    let dir = Temp(std::env::temp_dir().join(format!("re0drive-legacy-{}", uuid::Uuid::new_v4())));
+    std::fs::create_dir_all(&dir.0).unwrap();
+    let store = Store::open(&dir.0).await.unwrap();
+    let mut s = store.settings().await.unwrap();
+    // Round-trip through JSON with extra fields the way an old blob would.
+    let mut v = serde_json::to_value(&s).unwrap();
+    v.as_object_mut().unwrap().insert("nullbr_enabled".into(), json!(true));
+    v.as_object_mut().unwrap().insert("nullbr_api_key".into(), json!("should-be-ignored"));
+    v.as_object_mut().unwrap().insert("nullbr_app_id".into(), json!("old"));
+    let s2: re0drive::models::Settings = serde_json::from_value(v).unwrap();
+    store.save_settings(&s2).await.unwrap();
+    let loaded = store.settings().await.unwrap();
+    let pub_ = loaded.public();
+    assert!(!pub_.as_object().unwrap().contains_key("nullbr_enabled"));
+    assert!(!pub_.to_string().contains("should-be-ignored"));
 }

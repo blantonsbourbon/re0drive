@@ -367,38 +367,6 @@
                   </section>
                   <section class="panel settings-panel">
                     <div class="panel-heading">
-                      <h2><span class="section-icon">NB</span> NullBR 回退</h2>
-                      <span id="nullbr-state" class="pill neutral">关闭</span>
-                    </div>
-                    <p class="helper-text">
-                      当 RE0 中转返回空结果时，用 <a href="https://nullbr.readthedocs.io/" target="_blank" rel="noopener">NullBR 公开 API</a>
-                      按 TMDB ID 查询 115 分享。需自行注册获取 App ID / API Key；密钥加密保存、不会回显。
-                    </p>
-                    <label class="checkbox-label"
-                      ><input name="nullbr_enabled" type="checkbox" /><span
-                        >启用 NullBR 回退<small>仅在中转为空时触发；两边都空则返回空列表。</small></span
-                      ></label
-                    >
-                    <div class="form-grid">
-                      <label class="full"
-                        >服务地址<input name="nullbr_base_url" type="url" placeholder="https://api.nullbr.eu.org" /></label
-                      ><label
-                        >App ID<input name="nullbr_app_id" autocomplete="off" placeholder="你的 NullBR App ID" /></label
-                      ><label
-                        >API Key<input
-                          name="nullbr_api_key"
-                          type="password"
-                          autocomplete="new-password"
-                          placeholder="留空保留原值"
-                        /><small id="nullbr-hint">保存后不会返回到浏览器。</small
-                        ><span class="credential-clear"
-                          ><input name="clear_nullbr_key" type="checkbox" aria-label="清除 NullBR Key" />清除已保存的 Key</span
-                        ></label
-                      >
-                    </div>
-                  </section>
-                  <section class="panel settings-panel">
-                    <div class="panel-heading">
                       <h2><span class="section-icon">CK</span> 115 Cookie 保活</h2>
                       <span id="cookie-live-state" class="pill neutral">未知</span>
                     </div>

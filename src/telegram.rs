@@ -293,7 +293,7 @@ impl Telegram {
                         .send_html(
                             &s.tg_bot_token,
                             chat_id,
-                            "未找到资源（中转与 NullBR 均为空）。",
+                            "未找到资源。",
                             None,
                         )
                         .await;
@@ -386,7 +386,7 @@ impl Telegram {
         let mut keyboard: Vec<Vec<Value>> = vec![];
         for (i, r) in resources.iter().take(MAX_RESULTS).enumerate() {
             let n = i + 1;
-            let origin = if r.origin == "nullbr" { "NullBR" } else { "RE0" };
+            let origin = "RE0";
             let pts = if r.is_unlocked {
                 "已拥有".into()
             } else {
